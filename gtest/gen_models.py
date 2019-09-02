@@ -3,6 +3,7 @@ import keras
 from keras.models import Model
 from keras.models import load_model
 from keras.layers import *
+import numpy as np
 
 from keras2lwnn import *
 
@@ -12,30 +13,56 @@ os.environ['LWNN_GTEST'] = '1'
 
 def conv2d(name, shape=[32,32,5], filters=24, kernel_size=(3,3), strides=(1,1), padding="same"):
     input = Input(shape=shape, name=name+'_input')
-    output = Conv2D(filters, kernel_size=kernel_size, strides=strides, padding=padding, name=name+'_output')(input)
+    weights = [np.random.uniform(low=-0.1,high=0.2,size=tuple(list(kernel_size)+[shape[-1],filters])).astype(np.float32),
+               np.random.uniform(low=-0.1,high=0.2,size=tuple([filters])).astype(np.float32)]
+    output = Conv2D(filters, kernel_size=kernel_size, strides=strides, padding=padding,
+                    weights = weights, name=name+'_output')(input)
     model = Model(inputs=input, outputs=output)
-    feeds = {input:np.random.uniform(low=-1,high=1,size=tuple([10]+shape)).astype(np.float32)}
+    feeds = {input:np.random.uniform(low=-1,high=2,size=tuple([10]+shape)).astype(np.float32)}
     keras2lwnn(model, name, feeds)
 
 def relu(name, shape=[9,5,7]):
     input = Input(shape=shape, name=name+'_input')
     output = ReLU(name=name+'_output')(input)
     model = Model(inputs=input, outputs=output)
-    feeds = {input:np.random.uniform(low=-1,high=1,size=tuple([10]+shape)).astype(np.float32)}
+    feeds = {input:np.random.uniform(low=-1,high=2,size=tuple([10]+shape)).astype(np.float32)}
     keras2lwnn(model, name, feeds)
 
 def maxpool(name, shape=[32,32,3], pool_size=(2, 2), strides=(2, 2)):
     input = Input(shape=shape, name=name+'_input')
     output = MaxPooling2D(pool_size=pool_size, strides=strides, name=name+'_output')(input)
     model = Model(inputs=input, outputs=output)
-    feeds = {input:np.random.uniform(low=-1,high=1,size=tuple([10]+shape)).astype(np.float32)}
+    feeds = {input:np.random.uniform(low=-1,high=2,size=tuple([10]+shape)).astype(np.float32)}
+    keras2lwnn(model, name, feeds)
+
+def avgpool(name, shape=[13,17,3], pool_size=(2, 2), strides=(2, 2)):
+    input = Input(shape=shape, name=name+'_input')
+    output = AveragePooling2D(pool_size=pool_size, strides=strides, name=name+'_output')(input)
+    model = Model(inputs=input, outputs=output)
+    feeds = {input:np.random.uniform(low=-1,high=2,size=tuple([10]+shape)).astype(np.float32)}
+    keras2lwnn(model, name, feeds)
+
+def maxpool1d(name, shape=[32,32], pool_size=2, strides=2):
+    input = Input(shape=shape, name=name+'_input')
+    output = MaxPooling1D(pool_size=pool_size, strides=strides, name=name+'_output')(input)
+    model = Model(inputs=input, outputs=output)
+    feeds = {input:np.random.uniform(low=-1,high=2,size=tuple([10]+shape)).astype(np.float32)}
+    keras2lwnn(model, name, feeds)
+
+def avgpool1d(name, shape=[27,93], pool_size=2, strides=2):
+    input = Input(shape=shape, name=name+'_input')
+    output = AveragePooling1D(pool_size=pool_size, strides=strides, name=name+'_output')(input)
+    model = Model(inputs=input, outputs=output)
+    feeds = {input:np.random.uniform(low=-1,high=2,size=tuple([10]+shape)).astype(np.float32)}
     keras2lwnn(model, name, feeds)
 
 def dense(name, row=8, units=1024):
     input = Input(shape=[row], name=name+'_input')
-    output = Dense(units, name=name+'_output')(input)
+    weights = [np.random.uniform(low=-0.1,high=0.2,size=tuple([row, units])).astype(np.float32),
+               np.random.uniform(low=-0.1,high=0.2,size=tuple([units])).astype(np.float32)]
+    output = Dense(units, weights=weights, name=name+'_output')(input)
     model = Model(inputs=input, outputs=output)
-    feeds = {input:np.random.uniform(low=-1,high=1,size=tuple([10, row])).astype(np.float32)}
+    feeds = {input:np.random.uniform(low=-1,high=2,size=tuple([10, row])).astype(np.float32)}
     keras2lwnn(model, name, feeds)
 
 def softmax(name, units=32):
@@ -55,23 +82,51 @@ def pad(name, shape=[32,32,3], padding=(3,3)):
 
 def conv2d_bn(name, shape=[16,16,3], filters=10, kernel_size=(3,3), strides=(1,1), padding="same"):
     input = Input(shape=shape, name=name+'_input')
-    conv = Conv2D(filters, kernel_size=kernel_size, strides=strides, padding=padding)(input)
+    weights = [np.random.uniform(low=-0.1,high=0.2,size=tuple(list(kernel_size)+[shape[-1],filters])).astype(np.float32),
+               np.random.uniform(low=-0.1,high=0.2,size=tuple([filters])).astype(np.float32)]
+    conv = Conv2D(filters, kernel_size=kernel_size, strides=strides, weights=weights, padding=padding)(input)
     output = BatchNormalization(name=name+'_output')(conv)
     model = Model(inputs=input, outputs=output)
-    feeds = {input:np.random.uniform(low=-1,high=1,size=tuple([10]+shape)).astype(np.float32)}
+    feeds = {input:np.random.uniform(low=-1,high=2,size=tuple([10]+shape)).astype(np.float32)}
     keras2lwnn(model, name, feeds)
 
 def conv1d(name, shape=[128,9], filters=32, kernel_size=9, strides=2, padding="same"):
-    shape = [128, 9]
     input = Input(shape=shape, name=name+'_input')
-    output = Conv1D(filters, kernel_size=kernel_size, strides=strides, padding=padding, name=name+'_output')(input)
+    weights = [np.random.uniform(low=-0.1,high=0.1,size=tuple([kernel_size,shape[-1],filters])).astype(np.float32),
+               np.random.uniform(low=-0.1,high=0.1,size=tuple([filters])).astype(np.float32)]
+    output = Conv1D(filters, kernel_size=kernel_size, strides=strides, padding=padding, weights=weights, name=name+'_output')(input)
     model = Model(inputs=input, outputs=output)
-    feeds = {input:np.random.uniform(low=-1,high=1,size=tuple([10]+shape)).astype(np.float32)}
+    feeds = {input:np.random.uniform(low=-1,high=2,size=tuple([10]+shape)).astype(np.float32)}
     keras2lwnn(model, name, feeds)
 
 def dwconv2d(name, shape=[32,32,5], kernel_size=(3,3), strides=(1,1), padding="same"):
     input = Input(shape=shape, name=name+'_input')
+    weights = [np.random.uniform(low=-0.1,high=0.2,size=tuple(list(kernel_size)+[shape[-1],1])).astype(np.float32),
+               np.random.uniform(low=-0.1,high=0.2,size=tuple([shape[-1]])).astype(np.float32)]
     output = DepthwiseConv2D(kernel_size=kernel_size, strides=strides, padding=padding, name=name+'_output')(input)
+    model = Model(inputs=input, outputs=output)
+    feeds = {input:np.random.uniform(low=-1,high=2,size=tuple([10]+shape)).astype(np.float32)}
+    keras2lwnn(model, name, feeds)
+
+def concat(name, shape=[16, 16, 3], kernel_size=(3,3), strides=(1,1), padding="same", axis=-1):
+    input = Input(shape=shape, name=name+'_input')
+    x1 = Conv2D(32, kernel_size=kernel_size, strides=strides, padding=padding)(input)
+    x2 = Conv2D(32, kernel_size=kernel_size, strides=strides, padding=padding)(input)
+    x3 = Conv2D(32, kernel_size=kernel_size, strides=strides, padding=padding)(input)
+    output = concatenate([x1, x2,x3], axis=axis, name=name+'_output')
+    model = Model(inputs=input, outputs=output)
+    feeds = {input:np.random.uniform(low=-1,high=1,size=tuple([10]+shape)).astype(np.float32)}
+    keras2lwnn(model, name, feeds)
+
+def add(name, shape=[16, 16, 3], kernel_size=(3,3), strides=(1,1), padding="same"):
+    input = Input(shape=shape, name=name+'_input')
+    weights = [np.random.uniform(low=-0.1,high=0.5,size=tuple(list(kernel_size)+[shape[-1],32])).astype(np.float32),
+               np.random.uniform(low=-0.1,high=3,size=tuple([32])).astype(np.float32)]
+    x1 = Conv2D(32, kernel_size=kernel_size, strides=strides, weights=weights, padding=padding)(input)
+    weights = [np.random.uniform(low=-0.7,high=0.9,size=tuple(list(kernel_size)+[shape[-1],32])).astype(np.float32),
+               np.random.uniform(low=-0.1,high=2,size=tuple([32])).astype(np.float32)]
+    x2 = Conv2D(32, kernel_size=kernel_size, strides=strides, weights=weights, padding=padding)(input)
+    output = Add(name=name+'_output')([x1,x2])
     model = Model(inputs=input, outputs=output)
     feeds = {input:np.random.uniform(low=-1,high=1,size=tuple([10]+shape)).astype(np.float32)}
     keras2lwnn(model, name, feeds)
@@ -118,10 +173,22 @@ def mnist():
         model.save('models/mnist.h5')
     x_test = x_test.reshape(x_test.shape[0],x_test.shape[1],x_test.shape[2],1)/255.0
     x_test = x_test.astype(np.float32)
-    y_test = y_test.astype(np.int8)
+    y_test = y_test.astype(np.int32)
     keras2lwnn(model, 'mnist', {model.inputs[0]:x_test[0:100]})
     x_test.tofile('models/mnist/golden/input.raw')
     y_test.tofile('models/mnist/golden/output.raw')
+
+def uci_inception():
+    if(os.path.exists('models/uci_inception/golden/output.raw')):
+        print('uci_inception already generated, skip')
+        return
+    if(os.path.exists('models/uci_inception/best_model.h5')):
+        model = load_model('models/uci_inception/best_model.h5')
+        x_test = np.fromfile('models/uci_inception/input.raw', dtype=np.float32).reshape(-1, 128, 9)
+        y_test = np.fromfile('models/uci_inception/output.raw', dtype=np.int32)
+        keras2lwnn(model, 'uci_inception', {model.inputs[0]:x_test[0:100]})
+        x_test.tofile('models/uci_inception/golden/input.raw')
+        y_test.tofile('models/uci_inception/golden/output.raw')
 
 # https://keras-cn.readthedocs.io/en/latest/other/application/
 def resnet50():
@@ -151,4 +218,15 @@ if(__name__ == '__main__'):
     dwconv2d('dwconv2d_1')
     dwconv2d('dwconv2d_2',shape=[57,15,3],kernel_size=(2,2), strides=(1,1), padding="same")
     dwconv2d('dwconv2d_3',shape=[45,17,23], kernel_size=(2,3), strides=(3,2), padding="valid")
-
+    maxpool1d('maxpool1d_1')
+    maxpool1d('maxpool1d_2',shape=[34,29], pool_size=3, strides=3)
+    concat('concat_1')
+    concat('concat_2', axis=1)
+    concat('concat_3', axis=2)
+    concat('concat_4', axis=0)
+    uci_inception()
+    avgpool('avgpool_1')
+    avgpool('avgpool_2', shape=[37,240,5], pool_size=(2, 3), strides=(3, 1))
+    avgpool1d('avgpool1d_1')
+    avgpool1d('avgpool1d_2',shape=[341,129], pool_size=4, strides=5)
+    add('add_1')

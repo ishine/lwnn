@@ -4,7 +4,7 @@
  */
 /* ============================ [ INCLUDES  ] ====================================================== */
 #include "nn.h"
-#ifndef DISABLE_RUNTIME_CPU_Q8
+#if !defined(DISABLE_RUNTIME_CPU_Q8) || !defined(DISABLE_RUNTIME_CPU_S8)
 #include "../runtime_cpu.h"
 /* ============================ [ MACROS    ] ====================================================== */
 /* ============================ [ TYPES     ] ====================================================== */
@@ -18,8 +18,6 @@ typedef struct {
 int layer_cpu_q8_RESHAPE_init(const nn_t* nn, const layer_t* layer)
 {
 	int r =0;
-	layer_cpu_q8_reshape_context_t* context;
-
 	const layer_t* input;
 	layer_cpu_q8_context_t* input_context;
 
@@ -27,8 +25,6 @@ int layer_cpu_q8_RESHAPE_init(const nn_t* nn, const layer_t* layer)
 
 	if(0 == r)
 	{
-		context = (layer_cpu_q8_reshape_context_t*)layer->C->context;
-
 		input = layer->inputs[0];
 		input_context = (layer_cpu_q8_context_t*)input->C->context;
 
@@ -63,4 +59,18 @@ void layer_cpu_q8_RESHAPE_deinit(const nn_t* nn, const layer_t* layer)
 	rte_cpu_destory_layer_context(nn, layer);
 }
 
+#ifndef DISABLE_RUNTIME_CPU_S8
+int layer_cpu_s8_RESHAPE_init(const nn_t* nn, const layer_t* layer)
+{
+	return layer_cpu_q8_RESHAPE_init(nn, layer);
+}
+int layer_cpu_s8_RESHAPE_execute(const nn_t* nn, const layer_t* layer)
+{
+	return layer_cpu_q8_RESHAPE_execute(nn, layer);
+}
+void layer_cpu_s8_RESHAPE_deinit(const nn_t* nn, const layer_t* layer)
+{
+	layer_cpu_q8_RESHAPE_deinit(nn, layer);
+}
+#endif
 #endif /* DISABLE_RUNTIME_CPU_Q8 */

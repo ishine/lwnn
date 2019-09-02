@@ -59,6 +59,12 @@ extern "C" {
 #ifndef ARRAY_SIZE
 #define ARRAY_SIZE(a) (sizeof(a)/sizeof(a[0]))
 #endif
+
+#define NN_SCALER (1<<16)
+
+#define LAYER_Q(layer) RTE_FETCH_INT32((layer)->blobs[0]->blob, 0)
+#define LAYER_Z(layer) RTE_FETCH_INT32((layer)->blobs[0]->blob, 1)
+#define LAYER_S(layer) RTE_FETCH_INT32((layer)->blobs[0]->blob, 2)
 /* ============================ [ TYPES     ] ====================================================== */
 typedef struct
 {
@@ -74,6 +80,7 @@ typedef struct
 
 typedef enum {
 	NETWORK_TYPE_Q8,
+	NETWORK_TYPE_S8,
 	NETWORK_TYPE_Q16,
 	NETWORK_TYPE_FLOAT,
 } network_type_t;
@@ -81,19 +88,15 @@ typedef enum {
 typedef struct {
 	const char* name;
 	const layer_t* const* layers;
-	const layer_t* const* inputs;
-	const layer_t* const* outputs;
+	const nn_input_t* const* inputs;
+	const nn_output_t* const* outputs;
 	network_type_t type;
 } network_t;
 
 typedef struct nn {
 	runtime_t runtime;
 	const network_t* network;
-
 	runtime_type_t runtime_type;
-
-	const nn_input_t* const* inputs;
-	const nn_output_t* const* outputs;
 } nn_t;
 
 enum {
@@ -114,6 +117,10 @@ enum {
 	NN_E_NO_INPUT_BUFFER_PROVIDED = -13,
 	NN_E_CREATE_CL_PROGRAM_FAILED = -14,
 	NN_E_CREATE_CL_KERNEL_FAILED = -15,
+	NN_E_INPUTS_Q_MISMATCH = -16,
+	NN_E_CL_DEPTH_NOT_4_ALIGNED = -17,
+	NN_E_INPUTS_Z_MISMATCH = -18,
+	NN_E_INPUTS_S_MISMATCH = -19,
 };
 /* ============================ [ DECLARES  ] ====================================================== */
 extern int nn_log_level;
@@ -121,8 +128,7 @@ extern int nn_log_level;
 /* ============================ [ LOCALS    ] ====================================================== */
 /* ============================ [ FUNCTIONS ] ====================================================== */
 nn_t* nn_create(const network_t* network, runtime_type_t runtime_type);
-int nn_predict(nn_t* nn, const nn_input_t* const * inputs,
-		const nn_output_t* const * outputs);
+int nn_predict(nn_t* nn);
 
 void nn_set_log_level(int level);
 

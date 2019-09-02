@@ -4,7 +4,7 @@
  */
 /* ============================ [ INCLUDES  ] ====================================================== */
 #include "nn.h"
-#ifndef DISABLE_RUNTIME_CPU_Q8
+#if !defined(DISABLE_RUNTIME_CPU_Q8) || !defined(DISABLE_RUNTIME_CPU_S8)
 #include "../runtime_cpu.h"
 /* ============================ [ MACROS    ] ====================================================== */
 /* ============================ [ TYPES     ] ====================================================== */
@@ -18,7 +18,6 @@ typedef struct {
 int layer_cpu_q8_INPUT_init(const nn_t* nn, const layer_t* layer)
 {
 	int r = 0;
-	int8_t* int8s;
 	layer_cpu_q8_input_context_t* context;
 
 	r = rte_cpu_create_layer_context(nn, layer,
@@ -31,9 +30,6 @@ int layer_cpu_q8_INPUT_init(const nn_t* nn, const layer_t* layer)
 		RTE_CPU_LOG_LAYER_SHAPE(layer);
 
 		context->out[0] = NULL;
-
-		int8s = (int8_t*)layer->blobs[0]->blob;
-		context->Q = int8s[0];
 	}
 
 	return r;
@@ -60,4 +56,19 @@ void layer_cpu_q8_INPUT_deinit(const nn_t* nn, const layer_t* layer)
 {
 	rte_cpu_destory_layer_context(nn, layer);
 }
+
+#ifndef DISABLE_RUNTIME_CPU_S8
+int layer_cpu_s8_INPUT_init(const nn_t* nn, const layer_t* layer)
+{
+	return layer_cpu_q8_INPUT_init(nn, layer);
+}
+int layer_cpu_s8_INPUT_execute(const nn_t* nn, const layer_t* layer)
+{
+	return layer_cpu_q8_INPUT_execute(nn, layer);
+}
+void layer_cpu_s8_INPUT_deinit(const nn_t* nn, const layer_t* layer)
+{
+	rte_cpu_destory_layer_context(nn, layer);
+}
+#endif
 #endif /* DISABLE_RUNTIME_CPU_Q8 */

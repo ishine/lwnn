@@ -4,21 +4,23 @@
 from .base import *
 
 class LWNNFloatC(LWNNBaseC):
-    def __init__(self, model):
-        super().__init__(model, 'float')
+    def __init__(self, model, feeds=None):
+        try:
+            super().__init__(model, 'float', feeds)
+        except:
+            LWNNBaseC.__init__(self, model, 'float', feeds)
         self.generate()
-
-    def gen_LayerInput(self, layer):
-        self.gen_no_blobs(layer)
-        self.fpC.write('L_INPUT ({0}, L_DT_FLOAT);\n\n'.format(layer['name']))
 
     def gen_LayerConv(self, layer):
         W = layer['weights']
-        if(len(W.shape)==4):
-            W = W.transpose(0,2,3,1)
         B = layer['bias']
 
-        M = np.asarray(list(layer['pads']) + list(layer['strides']), np.int32)
+        if('strides' not in layer):
+            strides = [1, 1]
+        else:
+            strides = list(layer['strides'])
+
+        M = np.asarray(list(layer['pads']) + strides, np.int32)
         self.gen_layer_WBM(layer, W, B, M)
 
         if(layer['group'] == 1):
@@ -39,6 +41,22 @@ class LWNNFloatC(LWNNBaseC):
 
         self.fpC.write('L_DENSE ({0}, {1});\n\n'.format(layer['name'], layer['inputs'][0]))
 
-    def gen_LayerOutput(self, layer):
-        self.gen_no_blobs(layer)
-        self.fpC.write('L_OUTPUT ({0}, {1});\n\n'.format(layer['name'], layer['inputs'][0]))
+    def gen_LayerPriorBox(self, layer):
+        M1 = np.array([layer['min_size'], layer['aspect_ratio'], layer['offset']] + layer['variance'], np.float32)
+        M2 = np.array([layer['flip'], layer['clip']], np.int8)
+        self.gen_blobs(layer, [('%s_M1'%(layer['name']),M1), 
+                           ('%s_M2'%(layer['name']),M2)])
+        self.fpC.write('#define {0}_INPUTS {1}\n'.format(layer['name'], 
+                        ','.join(['L_REF(%s)'%inp for inp in layer['inputs']])))
+        self.fpC.write('L_PRIORBOX ({0}, {0}_INPUTS);\n\n'.format(layer['name']))
+
+    def gen_LayerDetectionOutput(self, layer):
+        M1 = np.array([layer['nms_threshold'], layer['confidence_threshold']], np.float32)
+        M2 = np.array([layer['num_classes'], layer['share_location'], 
+                       layer['background_label_id'], layer['top_k'], 
+                       layer['keep_top_k'], layer['code_type']], np.int32)
+        self.gen_blobs(layer, [('%s_M1'%(layer['name']),M1), 
+                           ('%s_M2'%(layer['name']),M2)])
+        self.fpC.write('#define {0}_INPUTS {1}\n'.format(layer['name'], 
+                        ','.join(['L_REF(%s)'%inp for inp in layer['inputs']])))
+        self.fpC.write('L_DETECTIONOUTPUT ({0}, {0}_INPUTS);\n\n'.format(layer['name']))

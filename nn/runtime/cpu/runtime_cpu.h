@@ -21,13 +21,14 @@ extern "C" {
 		size_t nout;					\
 		void** out
 
-#define LAYER_CPU_Q8_CONTEXT_MEMBER		\
-		LAYER_CPU_CONTEXT_MEMBER;		\
-		int8_t Q
+#define LAYER_CPU_Q_CONTEXT_MEMBER		\
+		LAYER_CPU_CONTEXT_MEMBER
 
-#define LAYER_CPU_Q16_CONTEXT_MEMBER		\
-		LAYER_CPU_CONTEXT_MEMBER;		\
-		int8_t Q
+#define LAYER_CPU_Q8_CONTEXT_MEMBER LAYER_CPU_Q_CONTEXT_MEMBER
+#define LAYER_CPU_Q16_CONTEXT_MEMBER LAYER_CPU_Q_CONTEXT_MEMBER
+
+#define LAYER_CPU_S8_CONTEXT_MEMBER		\
+		LAYER_CPU_Q_CONTEXT_MEMBER
 
 #ifndef FLT_MAX
 #define FLT_MAX  3.40282347e+38F
@@ -36,6 +37,9 @@ extern "C" {
 typedef enum {
 #ifndef DISABLE_RUNTIME_CPU_Q8
 	RTE_CPU_TYPE_Q8,
+#endif
+#ifndef DISABLE_RUNTIME_CPU_S8
+	RTE_CPU_TYPE_S8,
 #endif
 #ifndef DISABLE_RUNTIME_CPU_Q16
 	RTE_CPU_TYPE_Q16,
@@ -53,13 +57,16 @@ typedef struct
 
 typedef struct
 {
-	LAYER_CPU_Q8_CONTEXT_MEMBER;
-} layer_cpu_q8_context_t;
+	LAYER_CPU_Q_CONTEXT_MEMBER;
+} layer_cpu_q_context_t;
+
+typedef layer_cpu_q_context_t layer_cpu_q8_context_t;
+typedef layer_cpu_q_context_t layer_cpu_q16_context_t;
 
 typedef struct
 {
-	LAYER_CPU_Q16_CONTEXT_MEMBER;
-} layer_cpu_q16_context_t;
+	LAYER_CPU_S8_CONTEXT_MEMBER;
+} layer_cpu_s8_context_t;
 
 typedef struct rte_cpu_buffer
 {

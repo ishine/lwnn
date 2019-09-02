@@ -60,16 +60,38 @@ extern "C" {
 #define L_CONV2D(name, input)		L_LAYER_SI(name, input, CONV2D)
 #define L_RELU(name, input)			L_LAYER_SI(name, input, RELU)
 #define L_MAXPOOL(name, input)		L_LAYER_SI(name, input, MAXPOOL)
+#define L_AVGPOOL(name, input)		L_LAYER_SI(name, input, AVGPOOL)
 #define L_RESHAPE(name, input)		L_LAYER_SI(name, input, RESHAPE)
 #define L_DENSE(name, input)		L_LAYER_SI(name, input, DENSE)
 #define L_SOFTMAX(name, input)		L_LAYER_SI(name, input, SOFTMAX)
 #define L_PAD(name, input)			L_LAYER_SI(name, input, PAD)
 #define L_DWCONV2D(name, input)		L_LAYER_SI(name, input, DWCONV2D)
+#define L_TRANSPOSE(name, input)	L_LAYER_SI(name, input, TRANSPOSE)
 
 #define L_MAXIMUM(name, inputs)							\
 	static LCONST layer_t* l_inputs_##name[] = {		\
 			inputs, NULL };								\
 	L_LAYER_MI(name, MAXIMUM)
+
+#define L_ADD(name, inputs)								\
+	static LCONST layer_t* l_inputs_##name[] = {		\
+			inputs, NULL };								\
+	L_LAYER_MI(name, ADD)
+
+#define L_CONCAT(name, inputs)							\
+	static LCONST layer_t* l_inputs_##name[] = {		\
+			inputs, NULL };								\
+	L_LAYER_MI(name, CONCAT)
+
+#define L_PRIORBOX(name, inputs)						\
+	static LCONST layer_t* l_inputs_##name[] = {		\
+			inputs, NULL };								\
+	L_LAYER_MI(name, PRIORBOX)
+
+#define L_DETECTIONOUTPUT(name, inputs)					\
+	static LCONST layer_t* l_inputs_##name[] = {		\
+			inputs, NULL };								\
+	L_LAYER_MI(name, DETECTIONOUTPUT)
 
 #define L_REF(name) &l_layer_##name
 

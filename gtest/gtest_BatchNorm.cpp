@@ -9,15 +9,11 @@
 #define NNT_BatchNorm_MAX_QDIFF 0.15
 /* ============================ [ TYPES     ] ====================================================== */
 /* ============================ [ DECLARES  ] ====================================================== */
-NNT_CASE_REF(conv2dbn_1);
 /* ============================ [ DATAS     ] ====================================================== */
 NNT_CASE_DEF(BatchNorm) =
 {
-	NNT_CASE_DESC(conv2dbn_1, cond_Merge),
+	NNT_CASE_DESC(conv2dbn_1),
 };
 /* ============================ [ LOCALS    ] ====================================================== */
 /* ============================ [ FUNCTIONS ] ====================================================== */
-NNT_TEST_DEF(CPU, BatchNorm, Q8)
-NNT_TEST_DEF(CPU, BatchNorm, Q16)
-NNT_TEST_DEF(CPU, BatchNorm, Float)
-NNT_TEST_DEF(OPENCL, BatchNorm, Float)
+NNT_TEST_ALL(BatchNorm)

@@ -1,6 +1,9 @@
 from building import *
 Import('asenv')
 
+cwd = GetCurrentDir()
+print(cwd)
+
 objs = []
 objs += Glob('layers/*.c')
 objs += Glob('runtime/*.c')
@@ -9,16 +12,28 @@ objs += Glob('runtime/cpu/*/*.c')
 objs += Glob('runtime/opencl/*.c')
 objs += Glob('*.c')
 
-asenv.Append(CPPPATH=['nn','nn/layers','nn/runtime'])
+asenv.Append(CPPPATH=['%s/%s'%(cwd,d) for d in ['','layers','runtime']])
 
-if(IsPlatformWindows()):
-    asenv.AppendENVPath('PATH', os.getenv('PATH'))
-    cuda = os.getenv('CUDA_PATH')
-    asenv.Append(CPPPATH=['%s/include'%(cuda)])
-    objs += ['%s/lib/x64/OpenCL.lib'%(cuda)]
-else:
-    asenv.Append(LIBS=['OpenCL'])
+if(os.getenv('DISABLE_OPENCL') != 'True'):
+    if(IsPlatformWindows()):
+        asenv.AppendENVPath('PATH', os.getenv('PATH'))
+        cuda = os.getenv('CUDA_PATH')
+        asenv.Append(CPPPATH=['%s/include'%(cuda)])
 
+for rt in ['OPENCL', 'CPU_S8', 'CPU_Q8', 'CPU_Q16', 'CPU_FLOAT']:
+    if(os.getenv('DISABLE_%s'%(rt)) == 'True'):
+        asenv.Append(CPPDEFINES=['DISABLE_RUNTIME_%s'%(rt)])
+
+objs = asenv.Library('lwnn', objs)
+if(os.getenv('DISABLE_OPENCL') != 'True'):
+    if(GetOption('android')):
+        # adb pull /vendor/lib64/[libOpenCL.so,libCB.so,libgsl.so]
+        # adb pull /system/lib64/[libcutils.so,libz.so]
+       objs+= Glob('*.so')
+    elif(IsPlatformWindows()):
+        objs+=['%s/lib/x64/OpenCL.lib'%(cuda)]
+    else:
+        asenv.Append(LIBS=['OpenCL'])
 objs += SConscript('third_party/SConscript')
 
 Return('objs')

@@ -8,12 +8,11 @@
 /* ============================ [ TYPES     ] ====================================================== */
 /* ============================ [ DECLARES  ] ====================================================== */
 /* ============================ [ DATAS     ] ====================================================== */
+int g_CaseNumber = -1;
 /* ============================ [ LOCALS    ] ====================================================== */
 /* ============================ [ FUNCTIONS ] ====================================================== */
 int nnt_run(const network_t* network,
-			runtime_type_t runtime,
-			nn_input_t** inputs,
-			nn_output_t** outputs)
+			runtime_type_t runtime)
 {
 	int r = 0;
 	nn_t* nn = nn_create(network, runtime);
@@ -21,16 +20,7 @@ int nnt_run(const network_t* network,
 
 	if(nn != NULL)
 	{
-		for(nn_output_t** o=outputs; (*o) != NULL; o++)
-		{
-			if(NULL == (*o)->data)
-			{
-				(*o)->data = nn_allocate_output((*o)->layer);
-				assert(NULL != (*o)->data);
-			}
-		}
-
-		r = nn_predict(nn, inputs, outputs);
+		r = nn_predict(nn);
 		EXPECT_EQ(0, r);
 		nn_destory(nn);
 	}
@@ -75,7 +65,11 @@ void* nnt_load(const char* inraw, size_t *sz)
 	void* in;
 
 	FILE* fp = fopen(inraw,"rb");
-	assert(fp);
+	if(NULL==fp)
+	{
+		printf("failed to load raw %s\n", inraw);
+		assert(0);
+	}
 	fseek(fp, 0, SEEK_END);
 	*sz = ftell(fp);
 	fseek(fp, 0, SEEK_SET);
@@ -83,71 +77,6 @@ void* nnt_load(const char* inraw, size_t *sz)
 	fread(in, 1, *sz, fp);
 	fclose(fp);
 	return in;
-}
-
-nn_input_t** nnt_allocate_inputs(std::vector<const layer_t*> layers)
-{
-	int sz = layers.size();
-	nn_input_t* inputs = new nn_input_t[sz];
-	nn_input_t** inputs_list = new nn_input_t*[sz+1];
-
-	assert(NULL != inputs);
-	assert(NULL != inputs_list);
-
-	for(int i=0; i<sz; i++)
-	{
-		inputs[i].layer = layers[i];
-		inputs[i].data = nn_allocate_input(layers[i]);
-		assert(NULL != inputs[i].data);
-		inputs_list[i] = &inputs[i];
-	}
-
-	inputs_list[sz] = NULL;
-
-	return inputs_list;
-}
-
-nn_output_t** nnt_allocate_outputs(std::vector<const layer_t*> layers)
-{
-	int sz = layers.size();
-	nn_output_t* outputs = new nn_output_t[sz];
-	nn_output_t** outputs_list = new nn_output_t*[sz+1];
-
-	assert(NULL != outputs);
-	assert(NULL != outputs_list);
-
-	for(int i=0; i<sz; i++)
-	{
-		outputs[i].layer = layers[i];
-		outputs[i].data = NULL;
-		outputs_list[i] = &outputs[i];
-	}
-
-	outputs_list[sz] = NULL;
-
-	return outputs_list;
-}
-
-void nnt_free_inputs(nn_input_t** inputs)
-{
-	for(nn_input_t** in=inputs; (*in) != NULL; in++)
-	{
-		nn_free_input((*in)->data);
-	}
-
-	delete inputs[0];
-	delete inputs;
-}
-
-void nnt_free_outputs(nn_output_t** ouputs)
-{
-	for(nn_output_t** o=ouputs; (*o) != NULL; o++)
-	{
-		nn_free_output((*o)->data);
-	}
-
-	delete ouputs[0];
-	delete ouputs;
 }
 
 int nnt_is_equal(const float* A, const float* B, size_t sz, const float max_diff)
@@ -178,33 +107,47 @@ int nnt_is_equal(const float* A, const float* B, size_t sz, const float max_diff
 	return equal;
 }
 
-int8_t* nnt_quantize8(float* in, size_t sz, int8_t Q)
+int8_t* nnt_quantize8(float* in, size_t sz, int32_t Q, int32_t Z, float scale)
 {
 	int8_t* out = (int8_t*)malloc(sz);
+	float v;
 	assert(out);
 
 	for(size_t i=0; i<sz; i++)
 	{
-		out[i] = std::round(in[i]*(std::pow(2,Q)));
+		v = std::round(in[i]/scale*(std::pow(2,Q)))-Z;
+		if(v > 0x7F)
+		{
+			out[i] = 0x7F;
+		}
+		else if(v < -0x80)
+		{
+			out[i] = -0x80;
+		}
+		else
+		{
+			out[i] = v;
+		}
+
 	}
 
 	return out;
 }
 
-float* nnt_dequantize8(int8_t* in , size_t sz, int8_t Q)
+float* nnt_dequantize8(int8_t* in , size_t sz, int32_t Q, int32_t Z, float scale)
 {
 	float* out = (float*)malloc(sz*sizeof(float));
 	assert(out);
 
 	for(size_t i=0; i<sz; i++)
 	{
-		out[i] = in[i]/(std::pow(2,Q));
+		out[i] = scale*((float)in[i]+Z)/(std::pow(2,Q));
 	}
 
 	return out;
 }
 
-int16_t* nnt_quantize16(float* in, size_t sz, int8_t Q)
+int16_t* nnt_quantize16(float* in, size_t sz, int32_t Q)
 {
 	int16_t* out = (int16_t*)malloc(sz*sizeof(int16_t));
 	assert(out);
@@ -217,7 +160,7 @@ int16_t* nnt_quantize16(float* in, size_t sz, int8_t Q)
 	return out;
 }
 
-float* nnt_dequantize16(int16_t* in , size_t sz, int8_t Q)
+float* nnt_dequantize16(int16_t* in , size_t sz, int32_t Q)
 {
 	float* out = (float*)malloc(sz*sizeof(float));
 	assert(out);
@@ -237,25 +180,29 @@ void nnt_siso_network_test(runtime_type_t runtime,
 		float max_diff,
 		float qmax_diff)
 {
-	nn_input_t** inputs = nnt_allocate_inputs({network->inputs[0]});
-	nn_output_t** outputs = nnt_allocate_outputs({network->outputs[0]});
-
+	const nn_input_t* const * inputs = network->inputs;
+	const nn_output_t* const * outputs = network->outputs;
 	size_t sz_in;
+
 	float* IN = (float*)nnt_load(input, &sz_in);
 	ASSERT_EQ(sz_in, layer_get_size((inputs[0])->layer)*sizeof(float));
 
 	int8_t* in8 = NULL;
 	int16_t* in16 = NULL;
-	if(network->layers[0]->dtype== L_DT_INT8)
+	if(network->type== NETWORK_TYPE_Q8)
 	{
-		int8_t* blob = (int8_t*)network->layers[0]->blobs[0]->blob;
-		in8 = nnt_quantize8(IN, sz_in/sizeof(float), blob[0]);
+		in8 = nnt_quantize8(IN, sz_in/sizeof(float), LAYER_Q(inputs[0]->layer));
 		memcpy(inputs[0]->data, in8, sz_in/sizeof(float));
 	}
-	else if(network->layers[0]->dtype== L_DT_INT16)
+	else if(network->type== NETWORK_TYPE_S8)
 	{
-		int8_t* blob = (int8_t*)network->layers[0]->blobs[0]->blob;
-		in16 = nnt_quantize16(IN, sz_in/sizeof(float), blob[0]);
+		in8 = nnt_quantize8(IN, sz_in/sizeof(float), LAYER_Q(inputs[0]->layer),
+					LAYER_Z(inputs[0]->layer), (float)LAYER_S(inputs[0]->layer)/NN_SCALER);
+		memcpy(inputs[0]->data, in8, sz_in/sizeof(float));
+	}
+	else if(network->type== NETWORK_TYPE_Q16)
+	{
+		in16 = nnt_quantize16(IN, sz_in/sizeof(float), LAYER_Q(inputs[0]->layer));
 		memcpy(inputs[0]->data, in16, sz_in*sizeof(int16_t)/sizeof(float));
 	}
 	else
@@ -263,7 +210,7 @@ void nnt_siso_network_test(runtime_type_t runtime,
 		memcpy(inputs[0]->data, IN, sz_in);
 	}
 
-	int r = nnt_run(network, runtime, inputs, outputs);
+	int r = nnt_run(network, runtime);
 
 	if(0 == r)
 	{
@@ -273,8 +220,17 @@ void nnt_siso_network_test(runtime_type_t runtime,
 
 		if(in8 != NULL)
 		{
-			int8_t* blob = (int8_t*)outputs[0]->layer->blobs[0]->blob;
-			float* out = nnt_dequantize8((int8_t*)outputs[0]->data, layer_get_size(outputs[0]->layer), blob[0]);
+			float* out;
+			if(network->type== NETWORK_TYPE_Q8)
+			{
+				out = nnt_dequantize8((int8_t*)outputs[0]->data, layer_get_size(outputs[0]->layer), LAYER_Q(outputs[0]->layer));
+			}
+			else
+			{
+				int32_t* blob = (int32_t*)outputs[0]->layer->blobs[0]->blob;
+				out = nnt_dequantize8((int8_t*)outputs[0]->data, layer_get_size(outputs[0]->layer),
+						LAYER_Q(outputs[0]->layer), LAYER_Z(outputs[0]->layer), (float)LAYER_S(outputs[0]->layer)/NN_SCALER);
+			}
 			r = nnt_is_equal(OUT, out,
 					layer_get_size(outputs[0]->layer), max_diff);
 			free(out);
@@ -283,8 +239,7 @@ void nnt_siso_network_test(runtime_type_t runtime,
 		}
 		else if(in16 != NULL)
 		{
-			int8_t* blob = (int8_t*)outputs[0]->layer->blobs[0]->blob;
-			float* out = nnt_dequantize16((int16_t*)outputs[0]->data, layer_get_size(outputs[0]->layer), blob[0]);
+			float* out = nnt_dequantize16((int16_t*)outputs[0]->data, layer_get_size(outputs[0]->layer), LAYER_Q(outputs[0]->layer));
 			r = nnt_is_equal(OUT, out,
 					layer_get_size(outputs[0]->layer), max_diff);
 			free(out);
@@ -312,18 +267,69 @@ void nnt_siso_network_test(runtime_type_t runtime,
 	}
 
 	free(IN);
+}
 
-	nnt_free_inputs(inputs);
-	nnt_free_outputs(outputs);
+const network_t* nnt_load_network(const char* netpath, void** dll)
+{
+	const network_t* network = NULL;
+	char path[256];
+	char* bname;
+	char* cwd;
+	char symbol[128];
+
+	cwd = getcwd(NULL,0);
+	assert(cwd != NULL);
+	snprintf(path, sizeof(path),"%s/%s",cwd, netpath);
+	free(cwd);
+
+	*dll = dlopen(path, RTLD_NOW);
+	if((*dll) != NULL)
+	{
+		bname = basename(path);
+		assert(bname != NULL);
+		#ifdef _WIN32
+		bname[strlen(bname)-4] = 0;
+		#else
+		bname[strlen(bname)-3] = 0;
+		#endif
+		#ifdef _WIN32
+		snprintf(symbol, sizeof(symbol), "LWNN_%s", bname);
+		#else
+		snprintf(symbol, sizeof(symbol), "LWNN_%s", &bname[3]);
+		#endif
+		network = (const network_t*)dlsym(*dll, symbol);
+		if(NULL == network)
+		{
+			printf("failed to lookup symbol %s from %s\n", symbol, path);
+			dlclose(*dll);
+			*dll = NULL;
+		}
+	}
+	else
+	{
+		printf("failed to load %s: %s\n", path, dlerror());
+	}
+
+	return network;
 }
 
 void NNTTestGeneral(runtime_type_t runtime,
-		const network_t* network,
+		const char* netpath,
 		const char* input,
 		const char* output,
 		float max_diff,
 		float qmax_diff)
 {
+	const network_t* network;
+	void* dll;
+
+	network = nnt_load_network(netpath, &dll);
+	EXPECT_TRUE(network != NULL);
+	if(network == NULL)
+	{
+		return;
+	}
+	printf("  Test %s\n", network->name);
 	if(network->layers[0]->dtype== L_DT_INT8)
 	{
 		nnt_siso_network_test(runtime, network, input, output, max_diff, qmax_diff);
@@ -336,5 +342,7 @@ void NNTTestGeneral(runtime_type_t runtime,
 	{
 		nnt_siso_network_test(runtime, network, input, output);
 	}
+
+	dlclose(dll);
 }
 

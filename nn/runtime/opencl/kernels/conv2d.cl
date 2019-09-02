@@ -26,14 +26,14 @@ __kernel void conv2d(
 	int x = get_global_id(0);
 	int y = get_global_id(1);
 	int c = get_global_id(2);
-	
+
 	int in_row, in_col;
-	
+
 	int knlX,knlY,l,z;
-	
+
 	int in_channels = (ch_im_in+3)>>2;
 	int out_channels = (ch_im_out+3)>>2;
-	
+
 	const sampler_t sampler = CLK_NORMALIZED_COORDS_FALSE | CLK_ADDRESS_CLAMP | CLK_FILTER_NEAREST;
 
 	float4 out0;
@@ -41,7 +41,7 @@ __kernel void conv2d(
 	float4 weight;
 
 	for(n=0; n<N; n++) {
-		out0 = read_imagef(bias, sampler, (int2)(0, c));
+		out0 = read_imagef(bias, sampler, (int2)(c, 0));
 		for (knlY = 0; knlY < dim_kernel_y; knlY++) {
 			for (knlX = 0; knlX < dim_kernel_x; knlX++) {
 				in_row = stride_y * y + knlY - padding_y;

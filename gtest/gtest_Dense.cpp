@@ -10,18 +10,13 @@
 /* ============================ [ TYPES     ] ====================================================== */
 
 /* ============================ [ DECLARES  ] ====================================================== */
-NNT_CASE_REF(dense_1);
-NNT_CASE_REF(dense_2);
 /* ============================ [ DATAS     ] ====================================================== */
 NNT_CASE_DEF(Dense) =
 {
-	NNT_CASE_DESC(dense_1, BiasAdd),
-	NNT_CASE_DESC(dense_2, BiasAdd),
+	NNT_CASE_DESC(dense_1),
+	NNT_CASE_DESC(dense_2),
 };
 
 /* ============================ [ LOCALS    ] ====================================================== */
 /* ============================ [ FUNCTIONS ] ====================================================== */
-NNT_TEST_DEF(CPU, Dense, Q8)
-NNT_TEST_DEF(CPU, Dense, Q16)
-NNT_TEST_DEF(CPU, Dense, Float)
-NNT_TEST_DEF(OPENCL, Dense, Float)
+NNT_TEST_ALL(Dense)
