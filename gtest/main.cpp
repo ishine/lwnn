@@ -17,12 +17,15 @@ int main(int argc, char **argv)
 	::testing::InitGoogleTest(&argc, argv);
 
 	opterr = 0;
-	while((ch = getopt(argc, argv, "dm:")) != -1)
+	while((ch = getopt(argc, argv, "di:m:")) != -1)
 	{
 		switch(ch)
 		{
 			case 'd':
 				nn_set_log_level(0);
+				break;
+			case 'i':
+				g_InputImagePath = optarg;
 				break;
 			case 'm':
 				g_CaseNumber = atoi(optarg);

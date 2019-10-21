@@ -28,6 +28,7 @@ typedef struct
 #undef OP_DEF
 #ifndef DISABLE_NN_DDO
 extern void rte_ddo_save(const nn_t* nn, const layer_t* layer);
+static int cl_ddo_layer(const nn_t* nn, const layer_t* layer);
 #endif
 /* ============================ [ DATAS     ] ====================================================== */
 static const layer_ops_t cl_lops[] =
@@ -114,15 +115,14 @@ static void cl_show_build_errors(cl_program program, cl_device_id device)
 	}
 }
 
-static cl_program cl_create_program(cl_context context, cl_device_id device, const char* fileName)
+static cl_program cl_create_program(cl_context context, cl_device_id device,
+		const char* fileName, const char* option)
 {
 	cl_int errNum = CL_SUCCESS;
 	cl_program program = NULL;
 	char* srcStr = NULL;
 	FILE* file;
 	size_t sz;
-
-	NNLOG(NN_DEBUG, ("CL load %s\n", fileName));
 
 	file = fopen(fileName, "rb");
 
@@ -141,7 +141,7 @@ static cl_program cl_create_program(cl_context context, cl_device_id device, con
 				&sz, &errNum);
 			if(CL_SUCCESS == errNum)
 			{
-				errNum = clBuildProgram(program, 1, &device, NULL, NULL, NULL);
+				errNum = clBuildProgram(program, 1, &device, option, NULL, NULL);
 
 				if(CL_SUCCESS != errNum)
 				{
@@ -176,6 +176,10 @@ static int cl_execute_layer(const nn_t* nn, const layer_t* layer)
 	if(layer->op < ARRAY_SIZE(cl_lops))
 	{
 		r = cl_lops[layer->op].execute(nn, layer);
+
+#ifndef DISABLE_NN_DDO
+		NNDDO(NN_DEBUG, cl_ddo_layer(nn, layer));
+#endif
 	}
 
 	return r;
@@ -183,8 +187,12 @@ static int cl_execute_layer(const nn_t* nn, const layer_t* layer)
 #ifndef DISABLE_NN_DDO
 static int cl_ddo_layer(const nn_t* nn, const layer_t* layer)
 {
+	rte_cl_t* rt = (rte_cl_t*)nn->runtime;
+
 	if(layer->op != L_OP_OUTPUT)
 	{
+		clFlush(rt->command_queue);
+		clFinish(rt->command_queue);
 		NNDDO(NN_DEBUG, rte_ddo_save(nn, layer));
 	}
 	return 0;
@@ -215,6 +223,7 @@ static int cl_deinit_layer(const nn_t* nn, const layer_t* layer)
 
 static int cl_create_kernel(const nn_t* nn,
 		const char* program, const char* kernel,
+		const char* option,
 		cl_program *clprogram,
 		cl_kernel *clkernel)
 {
@@ -222,7 +231,9 @@ static int cl_create_kernel(const nn_t* nn,
 	rte_cl_t* rt = (rte_cl_t*)nn->runtime;
 	cl_int errNum;
 
-	*clprogram = cl_create_program(rt->context, rt->device, program);
+	NNLOG(NN_DEBUG, ("CL load %s::%s\n", program, kernel));
+
+	*clprogram = cl_create_program(rt->context, rt->device, program, option);
 	if(NULL != (*clprogram))
 	{
 		*clkernel = clCreateKernel(*clprogram, kernel, &errNum);
@@ -535,10 +546,6 @@ int rte_OPENCL_execute(const nn_t* nn)
 	{
 		clFlush(rt->command_queue);
 		clFinish(rt->command_queue);
-
-#ifndef DISABLE_NN_DDO
-		rte_do_for_each_layer(nn, cl_ddo_layer);
-#endif
 	}
 
 	return r;
@@ -607,7 +614,7 @@ int rte_cl_image2d_copy_in(const nn_t* nn, cl_mem img2d, const float* in, NHWC_t
 
 	if(NULL == rt->iknl)
 	{
-		r = cl_create_kernel(nn, OPENCL_PATH "input.cl", "input", &rt->iprg, &rt->iknl);
+		r = cl_create_kernel(nn, OPENCL_PATH "input.cl", "input", NULL, &rt->iprg, &rt->iknl);
 	}
 
 	if(0 == r)
@@ -646,7 +653,7 @@ int rte_cl_image2d_copy_out(const nn_t* nn, cl_mem img2d, float* out, NHWC_t* nh
 
 	if(NULL == rt->oknl)
 	{
-		r = cl_create_kernel(nn, OPENCL_PATH "output.cl", "output", &rt->oprg, &rt->oknl);
+		r = cl_create_kernel(nn, OPENCL_PATH "output.cl", "output", NULL, &rt->oprg, &rt->oknl);
 	}
 
 	if(0 == r)
@@ -720,6 +727,7 @@ void rte_cl_destory_memory(cl_mem mem)
 int rte_cl_create_layer_context(
 			const nn_t* nn, const layer_t* layer,
 			const char* program, const char* kernel,
+			const char* option,
 			size_t sz, size_t nout)
 {
 	int r = 0;
@@ -748,7 +756,15 @@ int rte_cl_create_layer_context(
 
 	if(0 == r)
 	{
-		r = cl_create_kernel(nn, program, kernel, &context->program, &context->kernel);
+		if(program != NULL)
+		{
+			r = cl_create_kernel(nn, program, kernel, option, &context->program, &context->kernel);
+		}
+		else
+		{
+			context->program = NULL;
+			context->kernel = NULL;
+		}
 	}
 
 	if(0 != r)
@@ -773,9 +789,16 @@ void rte_cl_destory_layer_context(const nn_t* nn, const layer_t* layer)
 
 	if(NULL != context)
 	{
-		clReleaseKernel(context->kernel);
-		clReleaseProgram(context->program);
-#ifdef ENABLE_CL_IMAGE_REUSE
+		if(context->kernel != NULL)
+		{
+			clReleaseKernel(context->kernel);
+		}
+
+		if(context->program != NULL)
+		{
+			clReleaseProgram(context->program);
+		}
+#ifndef ENABLE_CL_IMAGE_REUSE
 		for(i=0; i<context->nout; i++)
 		{
 			if(NULL != context->out[i])
@@ -912,14 +935,14 @@ void* rte_cl_alloc_image2d(const nn_t* nn, const layer_t* layer, int H, int W)
 #endif /* ENABLE_CL_IMAGE_REUSE */
 
 int rte_cl_create_layer_common(const nn_t* nn, const layer_t* layer,
-		const char* program, const char* kernel, size_t ctx_sz)
+		const char* program, const char* kernel, const char* option, size_t ctx_sz)
 {
 	int r = 0;
 
 	layer_cl_context_t* context;
 
 	r = rte_cl_create_layer_context(nn, layer,
-				program, kernel, ctx_sz, 1);
+				program, kernel, option, ctx_sz, 1);
 
 	if(0 == r)
 	{

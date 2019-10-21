@@ -19,6 +19,11 @@ class LWNNModel():
             (self.opt_IsLayerConv, self.opt_LayerConvWeightsReorder, None),
             (self.opt_IsTrainingOperators, self.opt_RemoveLayer, None),
             (self.opt_IsLayerTransposeCanBeRemoved, self.opt_RemoveLayer, None),
+            (self.opt_IsLayerConcatOnPriorBox, self.opt_ReplaceAsConstant, None),
+            (self.opt_IsLayerConcatWithOneOnly, self.opt_RemoveLayer, None),
+            (self.opt_IsLayerDetectionOutputWithConst, self.opt_MergeConstToDetectionOutput, None),
+            (self.opt_IsLayerReshapeBeforeSoftmax, self.opt_PermuteReshapeSoftmax, None),
+            (self.opt_IsLayerOutputWithOutput, self.opt_RemoveOutputWithOutput, None),
             (self.opt_IsLayerIdentity, self.opt_RemoveLayer, 'RemoveIdentity'),
             (self.opt_IsLayerReshape, self.opt_RemoveLayer, 'RemoveReshape'),
             (self.opt_IsLayerReLUConv, self.opt_MergeReLUConv, 'MergeReLUConv'),
@@ -190,7 +195,7 @@ class LWNNModel():
         r = False
         if(self.is_model_channel_first_cached==True):
             pass
-        elif(layer['op'] not in ['Conv', 'MaxPool', 'AveragePool']):
+        elif(layer['op'] not in ['Conv', 'MaxPool', 'AveragePool', 'Upsample']):
             CHIA = self.nchw_IsConsumerHasInputAdjustLayer(layer)
             PHOA = self.nchw_IsPreviousHasOutputAdjustLayer(layer)
             if( ((CHIA==True) and (PHOA==False)) or
@@ -295,11 +300,49 @@ class LWNNModel():
                 c_w[i] *= bn_gamma[i] / np.sqrt(bn_variance[i] + epsilon)
                 c_b[i] = (bn_gamma[i] * (c_b[i] - bn_mean[i]) / np.sqrt(bn_variance[i] + epsilon)) + bn_beta[i]
         else:
-            raise Exception("don't know how to fuse for %s shape %s"%(layer.name, c_w.shape))
+            raise Exception("don't know how to fuse for %s shape %s"%(layer['name'], c_w.shape))
         layer['weights'] = c_w
         layer['bias'] = c_b
         self.opt_RemoveLayer(bn)
         return True
+
+    def opt_IsLayerReshapeBeforeSoftmax(self, layer):
+        r = False
+        consumers = self.get_consumers(layer)
+        if((layer['op'] == 'Reshape') and
+               (len(consumers) == 1) and
+               (consumers[0]['op'] == 'Softmax')):
+            r = True
+        return r
+
+    def opt_IsLayerOutputWithOutput(self, layer):
+        r = False
+        if('inputs' in layer):
+            inputs = self.get_layers(layer['inputs'])
+            if((layer['op'] == 'Output') and
+               (len(inputs) == 1) and
+                (inputs[0]['op'] in ['Softmax', 'DetectionOutput'])):
+                r = True
+        return r
+
+    def opt_RemoveOutputWithOutput(self, layer):
+        inp = self.get_layers(layer['inputs'])[0]
+        inp['Output'] = True
+        self.opt_RemoveLayer(layer)
+        return True
+
+    def permute_shape(self, layer):
+        if('permute' not in layer):
+            shape = layer['shape']
+            if(len(shape) == 3):
+                layer['shape'] = [shape[0], shape[2], shape[1]]
+        layer['permute'] = True
+
+    def opt_PermuteReshapeSoftmax(self, layer):
+        self.permute_shape(layer)
+        softmax = self.get_consumers(layer)[0]
+        self.permute_shape(softmax)
+        return False
 
     def opt_IsLayerBeforeReshape(self, layer):
         r = False
@@ -430,7 +473,8 @@ class LWNNModel():
     def opt_IsLayerUnused(self, layer):
         r = False
         consumers = self.get_consumers(layer)
-        if((len(consumers) == 0) and (layer['op'] != 'Output')):
+        if((len(consumers) == 0) and
+           ((layer['op'] != 'Output') and ('Output' not in layer))):
             r = True
         return r
 
@@ -441,6 +485,57 @@ class LWNNModel():
             # LWNN is already NHWC
             r = True
         return r
+
+    def opt_IsLayerConcatOnPriorBox(self, layer):
+        r = False
+        if(layer['op'] == 'Concat'):
+            inputs = self.get_layers(layer['inputs'])
+            r = True
+            for inp in inputs:
+                if(inp['op'] != 'PriorBox'):
+                    r = False
+        return r
+
+    def opt_ReplaceAsConstant(self, layer):
+        outputs = self.run()
+        if(self.opt_IsLayerConcatOnPriorBox(layer)):
+            layer['ConcatOnPriorBox'] = True
+        const = outputs[layer['outputs'][0]]
+        const = np.array(const, np.float32)
+        layer['op'] = 'Const'
+        layer['inputs'] = []
+        layer['const'] = const
+        return True
+
+    def opt_IsLayerConcatWithOneOnly(self, layer):
+        r = False
+        if(layer['op'] == 'Concat'):
+            inputs = self.get_layers(layer['inputs'])
+            if(len(inputs) == 1):
+                r = True
+        return r
+
+    def opt_IsLayerDetectionOutputWithConst(self, layer):
+        r = False
+        if(layer['op'] == 'DetectionOutput'):
+            inputs = self.get_layers(layer['inputs'])
+            if((len(inputs) == 3) and
+               self.is_there_op(inputs, 'Const')):
+                r = True
+        return r
+
+    def opt_MergeConstToDetectionOutput(self, layer):
+        inputs = self.get_layers(layer['inputs'])
+        const = None
+        inputsL = []
+        for inp in inputs:
+            if(inp['op'] == 'Const'):
+                const = inp
+            else:
+                inputsL.append(inp['name'])
+        layer['priorbox'] = const['const']
+        layer['inputs'] = inputsL
+        return True
 
     def opt_LayerUnusedAction(self, layer):
         self.lwnn_model.remove(layer)
@@ -493,13 +588,14 @@ class LWNNModel():
         if(model == None):
             model = self.lwnn_model
         cstr = 'LWNN Model %s:\n'%(self.name)
-        order = ['name', 'op', 'shape','inputs', 'outputs', 'weights', 'bias']
+        WL = ['weights','bias', 'const', 'scales', 'rolling_mean', 'rolling_variance']
+        order = ['name', 'op', 'shape','inputs', 'outputs'] + WL
         for layer in model:
             cstr += ' {'
             for k in order:
                 if(k in layer):
                     v = layer[k]
-                    if(k in ['weights','bias']):
+                    if(k in WL):
                         cstr += '%s: %s, '%(k, v.shape)
                     else:
                         cstr += '%s: %s, '%(k,v)

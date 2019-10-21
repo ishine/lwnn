@@ -42,6 +42,13 @@ def avgpool(name, shape=[13,17,3], pool_size=(2, 2), strides=(2, 2)):
     feeds = {input:np.random.uniform(low=-1,high=2,size=tuple([10]+shape)).astype(np.float32)}
     keras2lwnn(model, name, feeds)
 
+def upsample2d(name, shape=[5,5,1], size=(2, 2)):
+    input = Input(shape=shape, name=name+'_input')
+    output = UpSampling2D(size=size, name=name+'_output')(input)
+    model = Model(inputs=input, outputs=output)
+    feeds = {input:np.random.randint(low=-128,high=127,size=tuple([10]+shape)).astype(np.float32)}
+    keras2lwnn(model, name, feeds)
+
 def maxpool1d(name, shape=[32,32], pool_size=2, strides=2):
     input = Input(shape=shape, name=name+'_input')
     output = MaxPooling1D(pool_size=pool_size, strides=strides, name=name+'_output')(input)
@@ -131,6 +138,15 @@ def add(name, shape=[16, 16, 3], kernel_size=(3,3), strides=(1,1), padding="same
     feeds = {input:np.random.uniform(low=-1,high=1,size=tuple([10]+shape)).astype(np.float32)}
     keras2lwnn(model, name, feeds)
 
+def transpose():
+    O = 'models/transpose/golden'
+    os.makedirs(O, exist_ok=True)
+    for i,shape in enumerate([(1,2,4,3), (1,34,23,77)]):
+        data = np.random.randint(low=0, high=100, size=shape).astype(np.float32)
+        output = data.transpose(0,3,1,2)
+        data.tofile('%s/input%s.raw'%(O, i))
+        output.tofile('%s/output%s_0.raw'%(O, i))
+
 def mnist():
     from keras.datasets import mnist
     from keras.utils import to_categorical
@@ -201,6 +217,7 @@ def mobilenetv2():
     keras2lwnn(model, 'mobilenetv2')
 
 if(__name__ == '__main__'):
+    transpose()
     conv2d('conv2d_1',shape=[5,5,3], filters=1, kernel_size=(2,2), strides=(1,1), padding="same")
     conv2d('conv2d_2')
     conv2d('conv2d_3',shape=[45,17,23], filters=13, kernel_size=(2,3), strides=(3,2), padding="valid")
@@ -230,3 +247,6 @@ if(__name__ == '__main__'):
     avgpool1d('avgpool1d_1')
     avgpool1d('avgpool1d_2',shape=[341,129], pool_size=4, strides=5)
     add('add_1')
+    upsample2d('upsample2d_1')
+    upsample2d('upsample2d_2', shape=[8,8,3], size=(2, 3))
+    upsample2d('upsample2d_3', shape=[19,19,13], size=(3, 2))

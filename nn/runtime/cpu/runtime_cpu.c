@@ -160,8 +160,9 @@ static int cpu_execute_layer(const nn_t* nn, const layer_t* layer)
 		if(layer->op < ARRAY_SIZE(cpu_lops[rt->type]))
 		{
 			r = cpu_lops[rt->type][layer->op].execute(nn, layer);
-
+#ifndef DISABLE_NN_DDO
 			NNDDO(NN_DEBUG, rte_ddo_save(nn, layer));
+#endif
 		}
 	}
 	else
@@ -344,6 +345,8 @@ int rte_cpu_create_layer_context(
 	if(0 == r)
 	{
 		layer->C->context = (layer_context_t*)context;
+
+		RTE_CPU_LOG_LAYER_SHAPE(layer);
 	}
 
 	return r;
@@ -372,8 +375,6 @@ int rte_cpu_create_layer_common(const nn_t* nn, const layer_t* layer, size_t ctx
 	if(0 == r)
 	{
 		context = (layer_cpu_context_t*)layer->C->context;
-
-		RTE_CPU_LOG_LAYER_SHAPE(layer);
 
 		context->out[0] = rte_cpu_create_buffer(nn, layer, NHWC_SIZE(context->nhwc)*type_sz);
 
@@ -447,6 +448,15 @@ void rte_cpu_release_buffer(rte_cpu_buffer_t* buffer)
 {
 	assert(buffer != NULL);
 	buffer->owner = NULL;
+}
+
+void* rte_cpu_fetch_out0(const nn_t* nn, const layer_t* layer)
+{
+	layer_cpu_context_t* context;
+	context = (layer_cpu_context_t*)layer->C->context;
+	(void)nn;
+
+	return context->out[0];
 }
 #endif /* DISABLE_RUNTIME_CPU */
 

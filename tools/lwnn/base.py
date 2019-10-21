@@ -18,14 +18,24 @@ class LWNNBaseC():
                 'Pad': self.gen_LayerPad,
                 'Softmax': self.gen_LayerSoftmax,
                 'Add': self.gen_LayerAdd,
-                'Transpose': self.gen_LayerTranspose,
-                'PriorBox': self.gen_LayerPriorBox,
+                'Upsample': self.gen_LayerUpsample,
+                'Yolo': self.gen_LayerYolo,
+                'YoloOutput': self.gen_LayerYoloOutput,
                 'DetectionOutput': self.gen_LayerDetectionOutput,
+                'Const': self.gen_LayerConst,
                 'Output': self.gen_LayerOutput }
         self.model = model
         self.T = T
         self.feeds = feeds
         self.name = os.path.basename(self.model.name)
+
+    def get_activation(self, layer):
+        actMap = { 'linear':0, 'Relu':1, 'leaky':2, }
+        if('activation' not in layer):
+            act = 0 # 0 means no activation
+        else:
+            act = actMap[layer['activation']]
+        return act
 
     def generate(self):
         self.fpH = self.model.open('%s.h'%(self.T))
@@ -125,7 +135,8 @@ class LWNNBaseC():
         self.fpH.write('};\n')
 
     def gen_blobs(self, layer, blobs):
-        if(self.T in ['q8', 's8', 'q16']):
+        if((self.T in ['q8', 's8', 'q16']) and
+           (layer['op'] not in ['DetectionOutput'])):
             blobs = [self.get_Q_blob(layer)] + blobs
         for blob in blobs:
             self.gen_blob(*blob)
@@ -186,13 +197,13 @@ class LWNNBaseC():
                 self.fpC.write('\t&%s_input,\n'%(layer['name']))
         self.fpC.write('\tNULL\n};\n\n')
         for layer in self.model.lwnn_model:
-            if(layer['op'] == 'Output'):
+            if((layer['op'] == 'Output') or ('Output' in layer)):
                 self.fpC.write('static %s %s_output_buffer[%s];\n'%(self.get_type(), layer['name'], self.get_size(layer)))
                 self.fpC.write('static const nn_output_t %s_output=\n{\n\tL_REF(%s), %s_output_buffer\n};\n'
                                %(layer['name'],layer['name'],layer['name']))
         self.fpC.write('static const nn_output_t* const %s_%s_outputs[] =\n{\n'%(self.name, self.T))
         for layer in self.model.lwnn_model:
-            if(layer['op'] == 'Output'):
+            if((layer['op'] == 'Output') or ('Output' in layer)):
                 self.fpC.write('\t&%s_output,\n'%(layer['name']))
         self.fpC.write('\tNULL\n};\n\n')
         self.fpC.write('static const layer_t* const %s_%s_layers[] =\n{\n'%(self.name, self.T))
@@ -255,8 +266,12 @@ class LWNNBaseC():
         shape = layer['shape']
         if(len(shape) == 4):
             axis = [0,3,1,2][axis]
-        if(len(shape) == 3):
+        elif(len(shape) == 3):
             axis = [0,3,1][axis]
+        elif(len(shape) == 2):
+            axis = [0,3][axis]
+        else:
+            assert(0)
         return axis
 
     def gen_LayerConcat(self, layer):
@@ -284,7 +299,8 @@ class LWNNBaseC():
         self.fpC.write('L_PAD ({0}, {1});\n\n'.format(layer['name'], layer['inputs'][0]))
 
     def gen_LayerSoftmax(self, layer):
-        self.gen_no_blobs(layer)
+        M = np.asarray([layer['axis']], np.int8)
+        self.gen_blobs(layer, [('%s_M'%(layer['name']),M)])
         self.fpC.write('L_SOFTMAX ({0}, {1});\n\n'.format(layer['name'], layer['inputs'][0]))
 
     def gen_LayerAdd(self, layer):
@@ -293,15 +309,39 @@ class LWNNBaseC():
                         ','.join(['L_REF(%s)'%inp for inp in layer['inputs']])))
         self.fpC.write('L_ADD ({0}, {0}_INPUTS);\n\n'.format(layer['name']))
 
-    def gen_LayerTranspose(self, layer):
-        M = np.asarray(layer['perm'], np.int32)
-        self.gen_blobs(layer, [('%s_M'%(layer['name']),M)])
-        self.fpC.write('L_TRANSPOSE ({0}, {1});\n\n'.format(layer['name'], layer['inputs'][0]))
+    def gen_LayerUpsample(self, layer):
+        self.gen_no_blobs(layer)
+        self.fpC.write('L_UPSAMPLE ({0}, {1});\n\n'.format(layer['name'], layer['inputs'][0]))
 
-    def gen_LayerPriorBox(self, layer):
-        raise NotImplementedError()
+    def gen_LayerYolo(self, layer):
+        mask = np.asarray(layer['mask'], np.int32)
+        anchors = np.asarray(layer['anchors'], np.int32)
+        M = np.asarray([layer['classes'], layer['num'], layer['jitter'], layer['ignore_thresh'], layer['truth_thresh']], np.float32)
+        self.gen_blobs(layer, [('%s_mask'%(layer['name']),mask),
+                               ('%s_anchors'%(layer['name']),anchors),
+                               ('%s_M'%(layer['name']),M)])
+        self.fpC.write('L_YOLO ({0}, {1});\n\n'.format(layer['name'], layer['inputs'][0]))
+
+    def gen_LayerYoloOutput(self, layer):
+        self.gen_no_blobs(layer)
+        self.fpC.write('#define {0}_INPUTS {1}\n'.format(layer['name'], 
+                        ','.join(['L_REF(%s)'%inp for inp in layer['inputs']])))
+        self.fpC.write('L_YOLOOUTPUT ({0}, {0}_INPUTS);\n\n'.format(layer['name']))
 
     def gen_LayerDetectionOutput(self, layer):
+        M1 = np.array([layer['nms_threshold'], layer['confidence_threshold']], np.float32)
+        M2 = np.array([layer['num_classes'], layer['share_location'], 
+                       layer['background_label_id'], layer['top_k'], 
+                       layer['keep_top_k'], layer['code_type']], np.int32)
+        priorbox = layer['priorbox']
+        self.gen_blobs(layer, [('%s_M1'%(layer['name']),M1), 
+                           ('%s_M2'%(layer['name']),M2),
+                           ('%s_priorbox'%(layer['name']),priorbox),])
+        self.fpC.write('#define {0}_INPUTS {1}\n'.format(layer['name'], 
+                        ','.join(['L_REF(%s)'%inp for inp in layer['inputs']])))
+        self.fpC.write('L_DETECTIONOUTPUT ({0}, {0}_INPUTS);\n\n'.format(layer['name']))
+
+    def gen_LayerConst(self, layer):
         raise NotImplementedError()
 
     def gen_LayerOutput(self, layer):

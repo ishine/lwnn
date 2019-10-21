@@ -66,7 +66,8 @@ extern "C" {
 #define L_SOFTMAX(name, input)		L_LAYER_SI(name, input, SOFTMAX)
 #define L_PAD(name, input)			L_LAYER_SI(name, input, PAD)
 #define L_DWCONV2D(name, input)		L_LAYER_SI(name, input, DWCONV2D)
-#define L_TRANSPOSE(name, input)	L_LAYER_SI(name, input, TRANSPOSE)
+#define L_UPSAMPLE(name, input)		L_LAYER_SI(name, input, UPSAMPLE)
+#define L_YOLO(name, input)			L_LAYER_SI(name, input, YOLO)
 
 #define L_MAXIMUM(name, inputs)							\
 	static LCONST layer_t* l_inputs_##name[] = {		\
@@ -83,15 +84,28 @@ extern "C" {
 			inputs, NULL };								\
 	L_LAYER_MI(name, CONCAT)
 
-#define L_PRIORBOX(name, inputs)						\
-	static LCONST layer_t* l_inputs_##name[] = {		\
-			inputs, NULL };								\
-	L_LAYER_MI(name, PRIORBOX)
+#define L_CONST(name)									\
+	static layer_context_container_t l_context_##name;	\
+	static LCONST int l_dims_##name[] = { name##_DIMS, 0 };	\
+	static LCONST layer_t l_layer_##name = {			\
+		/* name */ #name,								\
+		/* inputs */ NULL,								\
+		/* blobs */ l_blobs_##name,						\
+		/* dims */ l_dims_##name,						\
+		/* context */ &l_context_##name,				\
+		/* op */ L_OP_CONST,							\
+		/* dtype */ L_DT_AUTO							\
+	}
 
 #define L_DETECTIONOUTPUT(name, inputs)					\
 	static LCONST layer_t* l_inputs_##name[] = {		\
 			inputs, NULL };								\
 	L_LAYER_MI(name, DETECTIONOUTPUT)
+
+#define L_YOLOOUTPUT(name, inputs)						\
+	static LCONST layer_t* l_inputs_##name[] = {		\
+			inputs, NULL };								\
+	L_LAYER_MI(name, YOLOOUTPUT)
 
 #define L_REF(name) &l_layer_##name
 
@@ -150,6 +164,13 @@ typedef enum
 	L_DT_AUTO
 } layer_data_type_t;
 
+typedef enum
+{
+	L_ACT_NONE  = 0,
+	L_ACT_RELU  = 1,
+	L_ACT_LEAKY = 2,
+} layer_activation_type_t;
+
 typedef const int* layer_dimension_t;
 
 typedef struct layer_blob {
@@ -188,6 +209,8 @@ typedef struct layer
 } layer_t;
 
 typedef struct nn nn_t;
+
+typedef void* (*layer_fetch_t)(const nn_t*, const layer_t*);
 
 typedef struct
 {

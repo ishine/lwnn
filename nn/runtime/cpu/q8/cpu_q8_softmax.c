@@ -13,6 +13,7 @@
 /* ============================ [ TYPES     ] ====================================================== */
 typedef struct {
 	LAYER_CPU_Q8_CONTEXT_MEMBER;
+	void* p_out;
 } layer_cpu_q8_softmax_context_t;
 /* ============================ [ DECLARES  ] ====================================================== */
 /* ============================ [ DATAS     ] ====================================================== */
@@ -20,7 +21,26 @@ typedef struct {
 /* ============================ [ FUNCTIONS ] ====================================================== */
 int layer_cpu_q8_SOFTMAX_init(const nn_t* nn, const layer_t* layer)
 {
-	return rte_cpu_create_layer_common(nn, layer, sizeof(layer_cpu_q8_softmax_context_t), sizeof(int8_t));
+	int r;
+	layer_cpu_q8_softmax_context_t* context;
+	void* out = nn_get_output_data(nn, layer);
+
+	if(NULL != out)
+	{
+		r = rte_cpu_create_layer_context(nn, layer, sizeof(layer_cpu_q8_softmax_context_t), 1);
+	}
+	else
+	{
+		r = rte_cpu_create_layer_common(nn, layer, sizeof(layer_cpu_q8_softmax_context_t), sizeof(int8_t));
+	}
+
+	if(0 == r)
+	{
+		context = (layer_cpu_q8_softmax_context_t*)layer->C->context;
+		context->p_out = out;
+	}
+
+	return r;
 }
 
 int layer_cpu_q8_SOFTMAX_execute(const nn_t* nn, const layer_t* layer)
@@ -31,16 +51,23 @@ int layer_cpu_q8_SOFTMAX_execute(const nn_t* nn, const layer_t* layer)
 	layer_cpu_q8_context_t* input_context = (layer_cpu_q8_context_t*)input->C->context;
 	int8_t *IN = (int8_t*)input_context->out[0];
 	int8_t *O = (int8_t*)context->out[0];
-	size_t batch;
-	size_t batch_size = NHWC_BATCH_SIZE(input_context->nhwc);
+	size_t n_block = context->nhwc.N*context->nhwc.H*context->nhwc.W;
+	size_t stride = context->nhwc.C;
+	size_t i;
+
+	if(NULL == O)
+	{
+		O = (int8_t*)context->p_out;
+		context->out[0] = context->p_out;
+	}
 
 	NNLOG(NN_DEBUG, ("execute %s\n",layer->name));
 
-	for(batch=0; batch<input_context->nhwc.N; batch++)
+	for(i=0; i<n_block; i++)
 	{
-		arm_softmax_q7(IN+batch_size*batch,
-					batch_size,
-					O+batch_size*batch);
+		arm_softmax_q7(IN+stride*i,
+					stride,
+					O+stride*i);
 	}
 
 	return r;

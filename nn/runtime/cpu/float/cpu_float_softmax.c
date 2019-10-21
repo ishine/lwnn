@@ -11,6 +11,7 @@
 /* ============================ [ TYPES     ] ====================================================== */
 typedef struct {
 	LAYER_CPU_CONTEXT_MEMBER;
+	void* p_out;
 } layer_cpu_float_softmax_context_t;
 /* ============================ [ DECLARES  ] ====================================================== */
 /* ============================ [ DATAS     ] ====================================================== */
@@ -46,7 +47,26 @@ static void softmax_ref(const float * vec_in, const size_t dim_vec, float * p_ou
 /* ============================ [ FUNCTIONS ] ====================================================== */
 int layer_cpu_float_SOFTMAX_init(const nn_t* nn, const layer_t* layer)
 {
-	return rte_cpu_create_layer_common(nn, layer, sizeof(layer_cpu_float_softmax_context_t), sizeof(float));
+	int r;
+	layer_cpu_float_softmax_context_t* context;
+	void* out = nn_get_output_data(nn, layer);
+
+	if(NULL != out)
+	{
+		r = rte_cpu_create_layer_context(nn, layer, sizeof(layer_cpu_float_softmax_context_t), 1);
+	}
+	else
+	{
+		r = rte_cpu_create_layer_common(nn, layer, sizeof(layer_cpu_float_softmax_context_t), sizeof(int8_t));
+	}
+
+	if(0 == r)
+	{
+		context = (layer_cpu_float_softmax_context_t*)layer->C->context;
+		context->p_out = out;
+	}
+
+	return r;
 }
 
 int layer_cpu_float_SOFTMAX_execute(const nn_t* nn, const layer_t* layer)
@@ -57,16 +77,23 @@ int layer_cpu_float_SOFTMAX_execute(const nn_t* nn, const layer_t* layer)
 	layer_cpu_context_t* input_context = (layer_cpu_context_t*)input->C->context;
 	float *IN = (float*)input_context->out[0];
 	float *O = (float*)context->out[0];
-	size_t batch;
-	size_t batch_size = NHWC_BATCH_SIZE(input_context->nhwc);
+	size_t n_block = context->nhwc.N*context->nhwc.H*context->nhwc.W;
+	size_t stride = context->nhwc.C;
+	size_t i;
+
+	if(NULL == O)
+	{
+		O = (float*)context->p_out;
+		context->out[0] = context->p_out;
+	}
 
 	NNLOG(NN_DEBUG, ("execute %s\n",layer->name));
 
-	for(batch=0; batch<input_context->nhwc.N; batch++)
+	for(i=0; i<n_block; i++)
 	{
-		softmax_ref(IN+batch_size*batch,
-					batch_size,
-					O+batch_size*batch);
+		softmax_ref(IN+stride*i,
+					stride,
+					O+stride*i);
 	}
 
 	return r;

@@ -65,11 +65,7 @@ typedef struct rte_cl_image
 						layer->C->context->nhwc.W, layer->C->context->nhwc.C,	\
 						RTE_CL_NHWC_H(layer->C->context->nhwc),					\
 						RTE_CL_NHWC_W(layer->C->context->nhwc)))
-/*   NOTE: If enabled, the rte_ddo_save will not be correct for each
- * layer, but generally, the accuracy and all gtest case is okay,
- * I don't know what is wrong.
- *   So I still decide to by default enable it, for per layer output
- * debug, this can be temporarily disabled */
+
 #define ENABLE_CL_IMAGE_REUSE
 /* ============================ [ DATAS     ] ====================================================== */
 /* ============================ [ LOCALS    ] ====================================================== */
@@ -83,6 +79,7 @@ void rte_cl_destory_memory(cl_mem mem);
 int rte_cl_create_layer_context(
 			const nn_t* nn, const layer_t* layer,
 			const char* program, const char* kernel,
+			const char* option,
 			size_t sz, size_t nout);
 void rte_cl_destory_layer_context(const nn_t* nn, const layer_t* layer);
 int rte_cl_set_layer_args(
@@ -94,7 +91,7 @@ int rte_cl_read_buffer(const nn_t* nn, cl_mem buffer, void* data, size_t sz);
 void* rte_cl_alloc_image2d(const nn_t* nn, const layer_t* layer, int H, int W);
 #endif
 int rte_cl_create_layer_common(const nn_t* nn, const layer_t* layer,
-		const char* program, const char* kernel, size_t ctx_sz);
+		const char* program, const char* kernel, const char* option, size_t ctx_sz);
 #ifdef __cplusplus
 }
 #endif
