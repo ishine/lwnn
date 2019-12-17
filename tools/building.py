@@ -187,6 +187,7 @@ def PrepareBuilding(env):
         )
     if(GetOption('android')):
         SelectCompilerAndroid(env)
+    env.Append(CCFLAGS=['-g', '-O0'])
 
 def SelectCompilerAndroid(env):
     HOME = os.getenv('HOME')
@@ -198,6 +199,7 @@ def SelectCompilerAndroid(env):
         exit()
     if(IsPlatformWindows()):
         host = 'windows'
+        NDK = NDK.replace(os.sep, '/')
     else:
         host = 'linux'
     env['ANDROID_NDK'] = NDK

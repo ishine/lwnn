@@ -24,5 +24,4 @@ void layer_cpu_float_DETECTIONOUTPUT_deinit(const nn_t* nn, const layer_t* layer
 {
 	rte_cpu_destory_layer_context(nn, layer);
 }
-
 #endif /* DISABLE_RUNTIME_CPU_FLOAT */

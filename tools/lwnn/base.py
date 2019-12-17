@@ -20,6 +20,7 @@ class LWNNBaseC():
                 'Softmax': self.gen_LayerSoftmax,
                 'Add': self.gen_LayerAdd,
                 'Upsample': self.gen_LayerUpsample,
+                'BatchNormalization': self.gen_LayerBatchNormalization,
                 'Yolo': self.gen_LayerYolo,
                 'YoloOutput': self.gen_LayerYoloOutput,
                 'DetectionOutput': self.gen_LayerDetectionOutput,
@@ -98,7 +99,10 @@ class LWNNBaseC():
             raise Exception('quantization is not supported for %s model\n'%(self.T))
 
         if(only_needQ==False):
-            blobQ = np.clip(np.round(blob * 2 ** dec_bits), cmin, cmax).astype(dtype)
+            blob = blob * (2**dec_bits)
+            # Fix python2.7 numpy 'float' object has no attribute 'rint' issue
+            blob = blob.astype(np.float32)
+            blobQ = np.clip(np.round(blob), cmin, cmax).astype(dtype)
         else:
             blobQ = None
 
@@ -137,7 +141,7 @@ class LWNNBaseC():
 
     def gen_blobs(self, layer, blobs):
         if((self.T in ['q8', 's8', 'q16']) and
-           (layer['op'] not in ['DetectionOutput'])):
+           (layer['op'] not in ['DetectionOutput', 'YoloOutput'])):
             blobs = [self.get_Q_blob(layer)] + blobs
         for blob in blobs:
             self.gen_blob(*blob)
@@ -172,9 +176,11 @@ class LWNNBaseC():
             self.gen_layer_common(layer)
             self.GENL[layer['op']](layer)
 
-    def get_type(self):
+    def get_type(self, layer):
         t = 'float'
-        if(self.T == 'q8'):
+        if(layer['op'] in ['DetectionOutput', 'YoloOutput']):
+            pass # as only float version are supported
+        elif(self.T in ['q8', 's8']):
             t = 'int8_t'
         elif(self.T == 'q16'):
             t = 'int16_t'
@@ -189,7 +195,7 @@ class LWNNBaseC():
     def gen_models(self):
         for layer in self.model.lwnn_model:
             if(layer['op'] == 'Input'):
-                self.fpC.write('static %s %s_input_buffer[%s];\n'%(self.get_type(), layer['name'], self.get_size(layer)))
+                self.fpC.write('static %s %s_input_buffer[%s];\n'%(self.get_type(layer), layer['name'], self.get_size(layer)))
                 self.fpC.write('static const nn_input_t %s_input=\n{\n\tL_REF(%s), %s_input_buffer\n};\n'
                                %(layer['name'],layer['name'],layer['name']))
         self.fpC.write('static const nn_input_t* const %s_%s_inputs[] =\n{\n'%(self.name, self.T))
@@ -199,7 +205,7 @@ class LWNNBaseC():
         self.fpC.write('\tNULL\n};\n\n')
         for layer in self.model.lwnn_model:
             if((layer['op'] == 'Output') or ('Output' in layer)):
-                self.fpC.write('static %s %s_output_buffer[%s];\n'%(self.get_type(), layer['name'], self.get_size(layer)))
+                self.fpC.write('static %s %s_output_buffer[%s];\n'%(self.get_type(layer), layer['name'], self.get_size(layer)))
                 self.fpC.write('static const nn_output_t %s_output=\n{\n\tL_REF(%s), %s_output_buffer\n};\n'
                                %(layer['name'],layer['name'],layer['name']))
         self.fpC.write('static const nn_output_t* const %s_%s_outputs[] =\n{\n'%(self.name, self.T))
@@ -247,7 +253,10 @@ class LWNNBaseC():
             pads = [0,0]
         else:
             pads = list(layer['pads'])
-        M = np.asarray(list(layer['kernel_shape']) + pads + list(layer['strides']), np.int32)
+        with_mask = 0
+        if(len(layer['outputs']) == 2):
+            with_mask = 1
+        M = np.asarray(list(layer['kernel_shape']) + pads + list(layer['strides'] + [with_mask]), np.int32)
         self.gen_blobs(layer, [('%s_M'%(layer['name']),M)])
         self.fpC.write('L_MAXPOOL ({0}, {1});\n\n'.format(layer['name'], layer['inputs'][0]))
 
@@ -256,7 +265,10 @@ class LWNNBaseC():
             pads = [0,0]
         else:
             pads = list(layer['pads'])
-        M = np.asarray(list(layer['kernel_shape']) + pads + list(layer['strides']), np.int32)
+        with_mask = 0
+        if(len(layer['outputs']) == 2):
+            with_mask = 1
+        M = np.asarray(list(layer['kernel_shape']) + pads + list(layer['strides'] + [with_mask]), np.int32)
         self.gen_blobs(layer, [('%s_M'%(layer['name']),M)])
         self.fpC.write('L_AVGPOOL ({0}, {1});\n\n'.format(layer['name'], layer['inputs'][0]))
 
@@ -314,7 +326,30 @@ class LWNNBaseC():
 
     def gen_LayerUpsample(self, layer):
         self.gen_no_blobs(layer)
-        self.fpC.write('L_UPSAMPLE ({0}, {1});\n\n'.format(layer['name'], layer['inputs'][0]))
+        if(len(layer['inputs']) == 2):
+            self.fpC.write('#define {0}_INPUTS {1}\n'.format(layer['name'], 
+                ','.join(['L_REF(%s)'%inp for inp in layer['inputs']])))
+            self.fpC.write('L_UPSAMPLE2 ({0}, {0}_INPUTS);\n\n'.format(layer['name']))
+        else:
+            self.fpC.write('L_UPSAMPLE ({0}, {1});\n\n'.format(layer['name'], layer['inputs'][0]))
+
+    def gen_LayerBatchNormalization(self, layer):
+        if('momentum' in layer):
+            momentum = layer['momentum']
+        else:
+            momentum = 0.9
+        if('epsilon' in layer):
+            epsilon = layer['epsilon']
+        else:
+            epsilon = 1e-05
+        M = np.asarray([epsilon, momentum], dtype=np.float32)
+        blobs=[('%s_scale'%(layer['name']),layer['scale']),
+               ('%s_bias'%(layer['name']),layer['bias']),
+               ('%s_var'%(layer['name']),layer['var']),
+               ('%s_mean'%(layer['name']),layer['mean']),
+               ('%s_M'%(layer['name']),M)]
+        self.gen_blobs(layer, blobs)
+        self.fpC.write('L_BATCHNORM ({0}, {1});\n\n'.format(layer['name'], layer['inputs'][0]))
 
     def gen_LayerYolo(self, layer):
         mask = np.asarray(layer['mask'], np.int32)

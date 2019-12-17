@@ -288,7 +288,7 @@ static int cl_set_kernel_args_v(cl_kernel kernel, uint32_t nhwcMask, NHWC_t* nhw
 
 	if(CL_SUCCESS != errNum)
 	{
-		NNLOG(NN_ERROR,("CL set args[%d] failed with %d\n", i, errNum));
+		NNLOG(NN_ERROR,("CL set args[%d] failed with %d\n", i-1, errNum));
 		r = NN_E_CL_SET_ARGS_FAILED;
 	}
 
@@ -386,7 +386,11 @@ static int cl_adjust_layer_image(const nn_t* nn, const layer_t* layer)
 	rte_cl_image_t* image;
 	layer_cl_context_t* context = (layer_cl_context_t*)layer->C->context;
 
-	if(layer->op != L_OP_OUTPUT)
+	if( (layer->op != L_OP_OUTPUT)
+	#ifndef DISABLE_RTE_FALLBACK
+	 && (layer->op != L_OP_YOLO)
+	#endif
+	  )
 	{
 		for(i=0; i<context->nout; i++)
 		{
@@ -740,8 +744,9 @@ int rte_cl_create_layer_context(
 
 	if(context != NULL)
 	{
+		memset(context, 0, sz);
 		context->dtype = L_DT_FLOAT;
-		context->out = (cl_mem*)(((unsigned long long)context)+sz);
+		context->out = (void*)(((unsigned long long)context)+sz);
 		context->nout = nout;
 		r = layer_get_NHWC(layer, &context->nhwc);
 		if(0 != r)
@@ -782,7 +787,7 @@ int rte_cl_create_layer_context(
 
 void rte_cl_destory_layer_context(const nn_t* nn, const layer_t* layer)
 {
-#ifdef ENABLE_CL_IMAGE_REUSE
+#ifndef ENABLE_CL_IMAGE_REUSE
 	size_t i;
 #endif
 	layer_cl_context_t* context = (layer_cl_context_t*)layer->C->context;
@@ -966,4 +971,60 @@ int rte_cl_create_layer_common(const nn_t* nn, const layer_t* layer,
 
 	return r;
 }
+
+#ifndef DISABLE_RTE_FALLBACK
+extern void rte_cpuq_to_cpu_float_init_common(const nn_t* nn, const layer_t* layer);
+extern void rte_cpuq_to_cpu_float_post_execute_common(const nn_t* nn, const layer_t* layer);
+void rte_cl_to_cpu_float_init_common(const nn_t* nn, const layer_t* layer)
+{
+	if(L_OP_YOLOOUTPUT != layer->op)
+	{
+		rte_cpuq_to_cpu_float_init_common(nn, layer);
+	}
+
+}
+int rte_cl_to_cpu_float_pre_execute_common(const nn_t* nn, const layer_t* layer)
+{
+	int r=0;
+	layer_cl_context_t* context;
+	const layer_t* const* inputs;
+	void** cl_inputs = (void**)nn->scratch.area;
+	float* pf;
+
+	if(L_OP_YOLOOUTPUT == layer->op)
+	{
+		return 0;
+	}
+
+	inputs = layer->inputs;
+	while(NULL != (*inputs))
+	{
+		context = (layer_cl_context_t*)(*inputs)->C->context;
+		*cl_inputs++ = context->out[0];
+		inputs++;
+	}
+
+	pf = (float*)cl_inputs;
+
+	inputs = layer->inputs;
+	while((NULL != (*inputs)) && (0 == r))
+	{
+		context = (layer_cl_context_t*)(*inputs)->C->context;
+		r = rte_cl_image2d_copy_out(nn, context->out[0], pf, &(context->nhwc));
+		context->out[0] = pf;
+		pf += NHWC_SIZE(context->nhwc);
+		inputs++;
+	}
+
+	return r;
+}
+void rte_cl_to_cpu_float_post_execute_common(const nn_t* nn, const layer_t* layer)
+{
+	if(L_OP_YOLOOUTPUT != layer->op)
+	{
+		rte_cpuq_to_cpu_float_post_execute_common(nn, layer);
+	}
+
+}
+#endif /* DISABLE_RTE_FALLBACK */
 #endif /* DISABLE_RUNTIME_OPENCL */

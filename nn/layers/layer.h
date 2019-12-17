@@ -69,6 +69,7 @@ extern "C" {
 #define L_UPSAMPLE(name, input)		L_LAYER_SI(name, input, UPSAMPLE)
 #define L_YOLO(name, input)			L_LAYER_SI(name, input, YOLO)
 #define L_DECONV2D(name, input)		L_LAYER_SI(name, input, DECONV2D)
+#define L_BATCHNORM(name, input)	L_LAYER_SI(name, input, BATCHNORM)
 
 #define L_MAXIMUM(name, inputs)							\
 	static LCONST layer_t* l_inputs_##name[] = {		\
@@ -108,6 +109,11 @@ extern "C" {
 			inputs, NULL };								\
 	L_LAYER_MI(name, YOLOOUTPUT)
 
+#define L_UPSAMPLE2(name, inputs)						\
+	static LCONST layer_t* l_inputs_##name[] = {		\
+			inputs, NULL };								\
+	L_LAYER_MI(name, UPSAMPLE)
+
 #define L_REF(name) &l_layer_##name
 
 #define L_OPS_REF(name)			\
@@ -124,7 +130,9 @@ extern "C" {
 
 #define LAYER_CONTEXT_MEMBER		\
 	NHWC_t nhwc;					\
-	layer_data_type_t dtype
+	layer_data_type_t dtype;		\
+	size_t nout;					\
+	void** out
 
 #define NHWC_SIZE(nhwc) (((nhwc).N)*((nhwc).H)*((nhwc).W)*((nhwc).C))
 
@@ -143,6 +151,41 @@ int layer_##runtime##_##op##_execute(const nn_t* nn, const layer_t* layer)	\
 void layer_##runtime##_##op##_deinit(const nn_t* nn, const layer_t* layer)	\
 {																			\
 }
+
+#ifndef DISABLE_RTE_FALLBACK
+#define FALLBACK_LAYER_OPS(runtime, op, fb)									\
+extern void layer_##runtime##_to_##fb##_init_common(const nn_t*,const layer_t*);			\
+extern int layer_##runtime##_to_##fb##_pre_execute_common(const nn_t*,const layer_t*);		\
+extern void layer_##runtime##_to_##fb##_post_execute_common(const nn_t*,const layer_t*);	\
+extern int layer_##fb##_##op##_init(const nn_t*, const layer_t*);			\
+extern int layer_##fb##_##op##_execute(const nn_t*, const layer_t*);		\
+extern void layer_##fb##_##op##_deinit(const nn_t*, const layer_t*);		\
+int layer_##runtime##_##op##_init(const nn_t* nn, const layer_t* layer)		\
+{																			\
+	int r = layer_##fb##_##op##_init(nn, layer);							\
+	if(0 == r)																\
+	{																		\
+		layer_##runtime##_to_##fb##_init_common(nn, layer);					\
+	}																		\
+	return r;																\
+}																			\
+int layer_##runtime##_##op##_execute(const nn_t* nn, const layer_t* layer)	\
+{																			\
+	int r = layer_##runtime##_to_##fb##_pre_execute_common(nn, layer);		\
+	if(0 == r)																\
+	{																		\
+		r = layer_##fb##_##op##_execute(nn, layer);							\
+	}																		\
+	layer_##runtime##_to_##fb##_post_execute_common(nn, layer);				\
+	return r;																\
+}																			\
+void layer_##runtime##_##op##_deinit(const nn_t* nn, const layer_t* layer)	\
+{																			\
+	layer_##fb##_##op##_deinit(nn, layer);									\
+}
+#else
+#define FALLBACK_LAYER_OPS(runtime, op, fb) UNSUPPORTED_LAYER_OPS(runtime, op)
+#endif	/* DISABLE_RTE_FALLBACK */
 /* ============================ [ TYPES     ] ====================================================== */
 typedef enum
 {

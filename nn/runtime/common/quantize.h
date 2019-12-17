@@ -2,16 +2,24 @@
  * LWNN - Lightweight Neural Network
  * Copyright (C) 2019  Parai Wang <parai@foxmail.com>
  */
-#ifndef _YOLO_YOLO_H_
-#define _YOLO_YOLO_H_
+#ifndef NN_RUNTIME_COMMON_QUANTIZE_H_
+#define NN_RUNTIME_COMMON_QUANTIZE_H_
 /* ============================ [ INCLUDES  ] ====================================================== */
-#include "nn.h"
+#include <stdint.h>
+#include <stdlib.h>
 /* ============================ [ MACROS    ] ====================================================== */
+#ifdef __cplusplus
+extern "C" {
+#endif
 /* ============================ [ TYPES     ] ====================================================== */
 /* ============================ [ DECLARES  ] ====================================================== */
 /* ============================ [ DATAS     ] ====================================================== */
 /* ============================ [ LOCALS    ] ====================================================== */
 /* ============================ [ FUNCTIONS ] ====================================================== */
-int yolo_forward(float* output, const float* input, NHWC_t *inhwc, int num, int classes);
-int yolo_output_forward(const nn_t* nn, const layer_t* layer);
-#endif /* _YOLO_YOLO_H_ */
+void dequantize_q8(float* out, int8_t* in, size_t n, int32_t Q);
+void dequantize_s8(float* out, int8_t* in, size_t n, int32_t Q, int32_t S, int32_t Z);
+void dequantize_q16(float* out, int16_t* in, size_t n, int32_t Q);
+#ifdef __cplusplus
+}
+#endif
+#endif /* NN_RUNTIME_COMMON_QUANTIZE_H_ */

@@ -20,9 +20,7 @@ extern "C" {
 #define LAYER_CL_CONTEXT_MEMBER		\
 	LAYER_CONTEXT_MEMBER;			\
 	cl_program program;				\
-	cl_kernel kernel;				\
-	size_t nout;					\
-	cl_mem* out
+	cl_kernel kernel
 
 /* ============================ [ TYPES     ] ====================================================== */
 typedef struct
