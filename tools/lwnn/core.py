@@ -3,6 +3,7 @@
 
 from .float import *
 from .qformat import *
+import pickle
 
 class LWNNModel():
     def __init__(self, converter, name):
@@ -46,6 +47,13 @@ class LWNNModel():
         self.optimize()
         self.check()
         print(self)
+        self.save()
+
+    def save(self):
+        try:
+            pickle.dump(self.lwnn_model, open('%s.pkl'%(self.path), 'wb'), True)
+        except Exception as e:
+            print(e)
 
     @property
     def input(self):
