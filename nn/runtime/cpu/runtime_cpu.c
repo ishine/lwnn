@@ -207,7 +207,7 @@ int rte_CPU_init(const nn_t* nn)
 	rte_cpu_t* rt = (rte_cpu_t*)nn->runtime;
 #ifndef DISABLE_NN_LOG
 	size_t sum = 0;
-	size_t bufferId = -1;
+	int bufferId = -1;
 #endif
 
 	STAILQ_INIT(&(rt->buffers));
@@ -230,9 +230,9 @@ int rte_CPU_init(const nn_t* nn)
 			sum += b->sz;
 			bufferId ++;
 			#endif
-			NNLOG(NN_DEBUG, (" buffer%d: %d\n", bufferId, b->sz));
+			NNLOG(NN_DEBUG, (" buffer%d: %d\n", bufferId, (int)b->sz));
 		}
-		NNLOG(NN_DEBUG, (" summary: %d\n", sum));
+		NNLOG(NN_DEBUG, (" summary: %d\n", (int)sum));
 	}
 
 	if(0 == r)
@@ -439,6 +439,11 @@ void rte_cpuq_to_cpu_float_init_common(const nn_t* nn, const layer_t* layer)
 	layer_cpu_context_t* context;
 	const layer_t* const* inputs;
 
+	if(L_OP_YOLOOUTPUT == layer->op)
+	{
+		return;
+	}
+
 	inputs = layer->inputs;
 	while(NULL != (*inputs))
 	{
@@ -457,6 +462,11 @@ int rte_cpuq_to_cpu_float_pre_execute_common(const nn_t* nn, const layer_t* laye
 	const layer_t* const* inputs;
 	void** cl_inputs = (void**)nn->scratch.area;
 	float* pf;
+
+	if(L_OP_YOLOOUTPUT == layer->op)
+	{
+		return r;
+	}
 
 	inputs = layer->inputs;
 	while(NULL != (*inputs))
@@ -510,6 +520,11 @@ void rte_cpuq_to_cpu_float_post_execute_common(const nn_t* nn, const layer_t* la
 	const layer_t* const* inputs;
 	void** cl_inputs = (void**)nn->scratch.area;
 	float* pf;
+
+	if(L_OP_YOLOOUTPUT == layer->op)
+	{
+		return;
+	}
 
 	inputs = layer->inputs;
 	while(NULL != (*inputs))
