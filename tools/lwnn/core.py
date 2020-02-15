@@ -1,9 +1,12 @@
 # LWNN - Lightweight Neural Network
 # Copyright (C) 2019  Parai Wang <parai@foxmail.com>
 
+from . import *
 from .float import *
 from .qformat import *
+from lwnn2onnx import *
 import pickle
+import traceback
 
 class LWNNModel():
     def __init__(self, converter, name):
@@ -12,6 +15,8 @@ class LWNNModel():
             (self.nchw_IsInputAdjustLayer, self.nchw_ActionInputAdjustLayer, None),
             (self.nchw_IsOutputAdjustLayer, self.opt_RemoveLayer, None),
             (self.opt_IsLayerUnused, self.opt_LayerUnusedAction, None),
+            (self.opt_IsLayerFakeQuantize, self.opt_LayerFakeQuantize, None),
+            (self.opt_IsLayerHasInitializer, self.opt_LayerHasInitializer, None),
             (self.opt_IsLayerBeforeReshape, self.opt_LayerBeforeReshape, None),
             (self.opt_IsLayerDense, self.opt_LayerDense, None),
             (self.opt_IsLayerConv1D, self.opt_LayerConv1D, None),
@@ -20,15 +25,16 @@ class LWNNModel():
             (self.opt_IsLayerConv, self.opt_LayerConvWeightsReorder, None),
             (self.opt_IsLayerConvTranspose, self.opt_LayerConvTransposeWeightsReorder, None),
             (self.opt_IsTrainingOperators, self.opt_RemoveLayer, None),
-            (self.opt_IsLayerTransposeCanBeRemoved, self.opt_RemoveLayer, None),
-            (self.opt_IsLayerConcatOnPriorBox, self.opt_ReplaceAsConstant, None),
-            (self.opt_IsLayerConcatWithOneOnly, self.opt_RemoveLayer, None),
+            (self.opt_IsLayerConcatWithOneOnly, self.opt_LayerConcatWithOneOnly, None),
+            (self.opt_IsLayerConcatOnPriorBox, self.opt_LayerConcatOnPriorBox, None),
             (self.opt_IsLayerDetectionOutputWithConst, self.opt_MergeConstToDetectionOutput, None),
             (self.opt_IsLayerReshapeBeforeSoftmax, self.opt_PermuteReshapeSoftmax, None),
+            (self.opt_IsLayerOutputWithoutConsumers, self.opt_LayerOutputWithoutConsumers, None),
             (self.opt_IsLayerOutputWithOutput, self.opt_RemoveOutputWithOutput, None),
             (self.opt_IsLayerClipRelu, self.opt_LayerClip2Relu, None),
             (self.opt_IsLayerFlatten, self.opt_LayerFlatten2Reshape, None),
             (self.opt_IsLayerPad, self.opt_LayerPad, None),
+            (self.opt_IsLayerTransposeCanBeRemoved, self.opt_RemoveLayer, 'RemoveTranspose'),
             (self.opt_IsLayerIdentity, self.opt_RemoveLayer, 'RemoveIdentity'),
             (self.opt_IsLayerReshape, self.opt_RemoveLayer, 'RemoveReshape'),
             (self.opt_IsLayerReLUConv, self.opt_MergeReLUConv, 'MergeReLUConv'),
@@ -36,7 +42,7 @@ class LWNNModel():
             ]
         self.is_model_channel_first_cached=None
         self.converter = converter
-        self.name = name
+        self.name = self.toCstr(name)
         self.converter.save(self.path)
         self.lwnn_model = self.converter.convert()
         # optimization and convert to NCHW if origin model is NHWC
@@ -45,11 +51,17 @@ class LWNNModel():
         self.optimize(['RemoveIdentity'])
         self.omodel = self.clone()
         self.optimize()
+        self.omodel = self.clone()
+        self.save()
+        self.optimize(['RemoveTranspose'])
         self.check()
         print(self)
-        self.save()
 
     def save(self):
+        try:
+            lwnn2onnx(self.omodel, '%s.lwnn.onnx'%(self.path))
+        except:
+            traceback.print_exc()
         try:
             pickle.dump(self.lwnn_model, open('%s.pkl'%(self.path), 'wb'), True)
         except Exception as e:
@@ -62,11 +74,29 @@ class LWNNModel():
     def output(self):
         return self.converter.output
 
-    def run(self, feed=None):
-        return self.converter.run(feed)
+    def run(self, feed=None, model=None):
+        if(model == None):
+            model = self.omodel
+        O = self.converter.run(feed, model=model)
+        outputs = {}
+        for k,v in O.items():
+            outputs[self.toCstr(k)] = v
+        return outputs
+
+    def clone_layer(self, layer):
+        L = {}
+        for k,v in layer.items():
+            if(type(v) in [list, tuple]):
+                L[k] = list(v)
+            else:
+                L[k] = v
+        return L
 
     def clone(self):
-        return [dict(ly) for ly in self.lwnn_model]
+        model = []
+        for ly in self.lwnn_model:
+            model.append(self.clone_layer(ly))
+        return model
 
     def set(self, model):
         self.lwnn_model = model
@@ -421,6 +451,9 @@ class LWNNModel():
         layer['strides'] = list(strides)+ [1]
         pads = layer['pads']
         layer['pads'] = [pads[0], 0, pads[1], 0]
+        if('dilations' in layer):
+            dilation = layer['dilations'][0]
+            layer['dilations'] = [dilation, dilation]
         kernel_shape = layer['kernel_shape']
         layer['kernel_shape'] = list(kernel_shape)+ [1]
         return False
@@ -500,6 +533,18 @@ class LWNNModel():
         layer['op'] = 'Relu'
         return False
 
+    def opt_IsLayerOutputWithoutConsumers(self, layer):
+        r = False
+        consumers = self.get_consumers(layer)
+        if((layer['op'] in ['Softmax', 'DetectionOutput', 'YoloOutput']) and
+           (len(consumers) == 0)):
+            r = True
+        return r
+
+    def opt_LayerOutputWithoutConsumers(self, layer):
+        layer['Output'] = True
+        return False
+
     def opt_IsLayerFlatten(self, layer):
         r = False
         if(layer['op'] == 'Flatten'):
@@ -548,14 +593,29 @@ class LWNNModel():
         r = False
         consumers = self.get_consumers(layer)
         if((len(consumers) == 0) and
-           ((layer['op'] != 'Output') and ('Output' not in layer))):
+           ((layer['op'] not in ['Output', 'Softmax', 'DetectionOutput', 'YoloOutput']) 
+            and ('Output' not in layer))):
+            r = True
+        return r
+
+    def opt_IsLayerFakeQuantize(self, layer):
+        r = False
+        if(layer['op'] == 'FakeQuantize'):
+            r = True
+        return r
+
+    def opt_IsLayerHasInitializer(self, layer):
+        r = False
+        if((layer['op'] == 'Conv') and (len(layer['inputs']) > 1)):
+            r = True
+        elif((layer['op'] == 'Gather') and (len(layer['inputs']) > 1)):
             r = True
         return r
 
     def opt_IsLayerTransposeCanBeRemoved(self, layer):
         r = False
         if((layer['op'] == 'Transpose') and
-           (layer['perm'] == [0 , 2 , 3 , 1])):
+           (list(layer['perm']) == [0 , 2 , 3 , 1])):
             # LWNN is already NHWC
             r = True
         return r
@@ -570,16 +630,37 @@ class LWNNModel():
                     r = False
         return r
 
-    def opt_ReplaceAsConstant(self, layer):
-        outputs = self.run()
-        if(self.opt_IsLayerConcatOnPriorBox(layer)):
-            layer['ConcatOnPriorBox'] = True
-        const = outputs[layer['outputs'][0]]
+    def create_priorbox_model(self, layer):
+        model = []
+        for ly in self.get_layers(layer['inputs']):
+            L = self.clone_layer(ly)
+            inputs = self.get_layers(L['inputs'])
+            for inp in inputs:
+                if(inp['op'] == 'Input'):
+                    L['image_shape'] = inp['shape']
+                else:
+                    L['feature_shape'] = inp['shape']
+            L['inputs'] = []
+            model.append(L)
+        model.append(self.clone_layer(layer))
+        return model
+
+    def opt_LayerConcatOnPriorBox(self, layer):
+        outputs = self.run(model=self.create_priorbox_model(layer))
+        oname = layer['outputs'][0]
+        const = outputs[oname]
         const = np.array(const, np.float32)
+        layer['ConcatOnPriorBox'] = True
         layer['op'] = 'Const'
         layer['inputs'] = []
-        layer['const'] = const
+        layer['const'] = const 
         return True
+
+    def opt_LayerConcatWithOneOnly(self, layer):
+        inp = self.get_layers(layer['inputs'])[0]
+        if(inp['op'] == 'Split'):
+            self.opt_RemoveLayer(inp)
+        return self.opt_RemoveLayer(layer)
 
     def opt_IsLayerConcatWithOneOnly(self, layer):
         r = False
@@ -615,6 +696,26 @@ class LWNNModel():
         self.lwnn_model.remove(layer)
         return True
 
+    def opt_LayerFakeQuantize(self, layer):
+        r = self.opt_RemoveLayer(layer)
+        return r
+
+    def opt_LayerHasInitializer(self, layer):
+        op = layer['op']
+        inputs = self.get_layers(layer['inputs'])
+        if(op == 'Conv'):
+            layer['inputs'] = [inputs[0]['name']]
+            layer['weights'] = inputs[1]['const']
+            if(len(inputs) == 3):
+                layer['bias'] = inputs[2]['const']
+            else:
+                M = layer['weights'].shape[0]
+                layer['bias'] = np.zeros((M), np.float32)
+        elif(op == 'Gather'):
+            layer['inputs'] = [inputs[0]['name']]
+            layer['indices'] = inputs[1]['const']
+        return True
+
     def opt_IsTrainingOperators(self, layer):
         r = False
         if(layer['op'] in ['Dropout']):
@@ -628,9 +729,8 @@ class LWNNModel():
             id += 1
             layer = self.lwnn_model[id]
             for isopt, optact, oname in self.OPTIMIER:
-                if(isopt(layer) and
-                   (((oname == None) and (len(additions) == 0)) 
-                    or (oname in additions))):
+                if((((oname == None) and (len(additions) == 0)) 
+                    or (oname in additions)) and isopt(layer)):
                     r = optact(layer)
                     if(True == r): # if there is remove action, restart optimization
                         id = -1
@@ -638,8 +738,11 @@ class LWNNModel():
                         break
 
     def toCstr(self, name):
-        for s in ['/',':', '-']:
+        for s in ['/',':', '-', '.']:
             name = name.replace(s, '_')
+        fc = name[0]
+        if(fc.isdigit()):
+            name = '_' + name
         return name
 
     def check(self):
@@ -656,25 +759,13 @@ class LWNNModel():
             layer['name'] = self.toCstr(layer['name'])
             if('inputs' in layer):
                 layer['inputs'] = [self.toCstr(inp) for inp in layer['inputs']]
+            layer['outputs'] = [self.toCstr(out) for out in layer['outputs']]
         self.is_model_channel_first()
 
     def __str__(self, model=None):
         if(model == None):
             model = self.lwnn_model
         cstr = 'LWNN Model %s:\n'%(self.name)
-        WL = ['weights','bias', 'const', 'scales', 'rolling_mean', 'rolling_variance']
-        order = ['name', 'op', 'shape','inputs', 'outputs'] + WL
         for layer in model:
-            cstr += ' {'
-            for k in order:
-                if(k in layer):
-                    v = layer[k]
-                    if(k in WL):
-                        cstr += '%s: %s, '%(k, v.shape)
-                    else:
-                        cstr += '%s: %s, '%(k,v)
-            for k,v in layer.items():
-                if(k not in order):
-                    cstr += '%s: %s, '%(k,v)
-            cstr += '}\n'
+            cstr += ' ' + Layer2Str(layer)
         return cstr

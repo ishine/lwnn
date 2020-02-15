@@ -10,26 +10,28 @@
 /* ============================ [ TYPES     ] ====================================================== */
 typedef struct {
 	LAYER_CPU_CONTEXT_MEMBER;
-} layer_cpu_float_conv2d_context_t;
+} layer_cpu_float_dilconv2d_context_t;
 /* ============================ [ DECLARES  ] ====================================================== */
 /* ============================ [ DATAS     ] ====================================================== */
 /* ============================ [ LOCALS    ] ====================================================== */
-void __weak convolve_HWC_ref_nonsquare(const float * Im_in,  /* input image */
-		const int dim_im_in_x,  /* input image dimension x */
-		const int dim_im_in_y,  /* input image dimension y */
-		const int ch_im_in, /* number of input image channels */
-		const float * wt, /* kernel weights */
-		const int ch_im_out, /* number of filters, i.e., output image channels */
-		const int dim_kernel_x, /* filter kernel size x */
-		const int dim_kernel_y, /* filter kernel size y */
-		const int padding_x,    /* padding sizes x */
-		const int padding_y,    /* padding sizes y */
-		const int stride_x, /* stride x */
-		const int stride_y, /* stride y */
-		const float * bias,   /* bias */
-		float * Im_out, /* output image */
-		const int dim_im_out_x, /* output image dimension x */
-		const int dim_im_out_y,  /* output image dimension y */
+void __weak dilated_convolve_HWC_ref_nonsquare(const float * Im_in,
+		const int dim_im_in_x,
+		const int dim_im_in_y,
+		const int ch_im_in,
+		const float * wt,
+		const int ch_im_out,
+		const int dim_kernel_x,
+		const int dim_kernel_y,
+		const int padding_x,
+		const int padding_y,
+		const int stride_x,
+		const int stride_y,
+		const int dilation_x,
+		const int dilation_y,
+		const float * bias,
+		float * Im_out,
+		const int dim_im_out_x,
+		const int dim_im_out_y,
 		layer_activation_type_t act
 		)
 {
@@ -46,8 +48,8 @@ void __weak convolve_HWC_ref_nonsquare(const float * Im_in,  /* input image */
 				conv_out = bias[i];
 				for (m = 0; m < dim_kernel_y; m++) {
 					for (n = 0; n < dim_kernel_x; n++) {
-						in_row = stride_y * j + m - padding_y;
-						in_col = stride_x * k + n - padding_x;
+						in_row = stride_y * j + m*dilation_y - padding_y;
+						in_col = stride_x * k + n*dilation_x - padding_x;
 						if ((in_row >= 0) && (in_col >= 0) &&
 							(in_row < dim_im_in_y) && (in_col < dim_im_in_x))
 						{
@@ -74,14 +76,14 @@ void __weak convolve_HWC_ref_nonsquare(const float * Im_in,  /* input image */
 	}
 }
 /* ============================ [ FUNCTIONS ] ====================================================== */
-int layer_cpu_float_CONV2D_init(const nn_t* nn, const layer_t* layer)
+int layer_cpu_float_DILCONV2D_init(const nn_t* nn, const layer_t* layer)
 {
-	return rte_cpu_create_layer_common(nn, layer, sizeof(layer_cpu_float_conv2d_context_t), sizeof(float));
+	return rte_cpu_create_layer_common(nn, layer, sizeof(layer_cpu_float_dilconv2d_context_t), sizeof(float));
 }
-int layer_cpu_float_CONV2D_execute(const nn_t* nn, const layer_t* layer)
+int layer_cpu_float_DILCONV2D_execute(const nn_t* nn, const layer_t* layer)
 {
 	int r = 0;
-	layer_cpu_float_conv2d_context_t* context = (layer_cpu_float_conv2d_context_t*)layer->C->context;
+	layer_cpu_float_dilconv2d_context_t* context = (layer_cpu_float_dilconv2d_context_t*)layer->C->context;
 	const layer_t* input = layer->inputs[0];
 	layer_cpu_context_t* input_context = (layer_cpu_context_t*)input->C->context;
 	float *IN = (float*)input_context->out[0];
@@ -91,6 +93,7 @@ int layer_cpu_float_CONV2D_execute(const nn_t* nn, const layer_t* layer)
 	int knlX, knlY, padX, padY, strideX, strideY;
 	int* ints;
 	layer_activation_type_t act;
+	int dilationX, dilationY;
 
 	size_t batch;
 	size_t batch_sizeIn = NHWC_BATCH_SIZE(input_context->nhwc);
@@ -107,14 +110,16 @@ int layer_cpu_float_CONV2D_execute(const nn_t* nn, const layer_t* layer)
 	strideY = ints[4];
 	strideX = ints[5];
 	act = ints[6];
+	dilationY = ints[7];
+	dilationX = ints[8];
 
-	NNLOG(NN_DEBUG, ("execute %s: kernel=[%d %d], pads=[%d %d], strides=[%d %d]\n",
+	NNLOG(NN_DEBUG, ("execute %s: kernel=[%d %d], pads=[%d %d], strides=[%d %d], dilations=[%d %d]\n",
 			layer->name,
-			knlY, knlX, padY, padX, strideY, strideX));
+			knlY, knlX, padY, padX, strideY, strideX, dilationY, dilationX));
 
 	for(batch=0; batch<input_context->nhwc.N; batch++)
 	{
-		convolve_HWC_ref_nonsquare(IN+batch_sizeIn*batch,
+		dilated_convolve_HWC_ref_nonsquare(IN+batch_sizeIn*batch,
 			input_context->nhwc.W,
 			input_context->nhwc.H,
 			input_context->nhwc.C,
@@ -123,6 +128,7 @@ int layer_cpu_float_CONV2D_execute(const nn_t* nn, const layer_t* layer)
 			knlX, knlY,
 			padX, padY,
 			strideX, strideY,
+			dilationX, dilationY,
 			bias,
 			O+batch_sizeO*batch,
 			context->nhwc.W,
@@ -132,7 +138,7 @@ int layer_cpu_float_CONV2D_execute(const nn_t* nn, const layer_t* layer)
 
 	return r;
 }
-void layer_cpu_float_CONV2D_deinit(const nn_t* nn, const layer_t* layer)
+void layer_cpu_float_DILCONV2D_deinit(const nn_t* nn, const layer_t* layer)
 {
 	rte_cpu_destory_layer_context(nn, layer);
 }

@@ -1,7 +1,7 @@
 # LWNN - Lightweight Neural Network
 # Copyright (C) 2019  Parai Wang <parai@foxmail.com>
 
-from lwnn import *
+from lwnn.core import *
 import onnx
 import onnxruntime
 import numpy as np
@@ -70,7 +70,7 @@ class OnnxConverter():
                 return oT
         raise Exception("can't determint output type for %s"%(output))
 
-    def run(self, feed=None):
+    def run(self, feed=None, **kwargs):
         outputs = {}
         oldoutputs = [n for n in self.onnx_model.graph.output]
         del self.onnx_model.graph.output[:]

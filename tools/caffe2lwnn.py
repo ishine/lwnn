@@ -1,9 +1,8 @@
 # LWNN - Lightweight Neural Network
 # Copyright (C) 2019  Parai Wang <parai@foxmail.com>
 
-from lwnn import *
+from lwnn.core import *
 import os
-from _sqlite3 import NotSupportedError
 os.environ['GLOG_minloglevel'] = '2'
 import caffe
 from caffe.proto import caffe_pb2
@@ -105,8 +104,9 @@ class CaffeConverter():
 
     def to_LayerPriorBox(self, cly):
         layer = self.to_LayerCommon(cly)
-        layer['min_size'] = cly.prior_box_param.min_size[0]
-        layer['aspect_ratio'] = cly.prior_box_param.aspect_ratio[0]
+        layer['min_size'] = cly.prior_box_param.min_size
+        layer['max_size'] = self.get_field(cly.prior_box_param, 'max_size', [])
+        layer['aspect_ratio'] = cly.prior_box_param.aspect_ratio
         layer['variance'] = [v for v in cly.prior_box_param.variance]
         layer['offset'] = cly.prior_box_param.offset
         layer['flip'] = cly.prior_box_param.flip
@@ -173,7 +173,7 @@ class CaffeConverter():
     def save(self, path):
         pass
 
-    def run(self, feed):
+    def run(self, feed, **kwargs):
         outputs = {}
         if(feed == None):
             feed = {}
@@ -221,13 +221,17 @@ class CaffeConverter():
         L = list(lwnn_model)
         L.reverse()
         for iname in layer['inputs']:
+            exist = False
             for ly in L:
                 for o in ly['outputs']:
                     if(o == iname):
                         inputs.append(ly['name'])
-                        if(len(inputs) == len(layer['inputs'])):
-                            # caffe may reuse top buffer to save memory
-                            return inputs
+                        exist = True
+                        break
+                if(exist):
+                    break
+            if(exist == False):
+                raise Exception("can't find %s for %s"%(iname, Layer2Str(layer)))
         return inputs
 
     def convert(self):
@@ -287,28 +291,7 @@ def caffe2lwnn(model, name, **kargs):
         feeds = None
 
     if(type(feeds) == str):
-        inputs = model.converter.inputs
-        feeds_ = {}
-        for rawF in glob.glob('%s/*.raw'%(feeds)):
-            raw = np.fromfile(rawF, np.float32)
-            for n, shape in inputs.items():
-                if(len(shape) == 4):
-                    shape = [shape[s] for s in [0,2,3,1]]
-                sz = 1
-                for s in shape:
-                    sz = sz*s
-                if(raw.shape[0] == sz):
-                    raw = raw.reshape(shape)
-                    if(n in feeds_):
-                        feeds_[n] = np.concatenate((feeds_[n], raw))
-                    else:
-                        feeds_[n] = raw
-                    print('using %s for input %s'%(rawF, n))
-        feeds = {}
-        for n,v in feeds_.items():
-            if(len(v.shape) == 4):
-                v = np.transpose(v, (0,3,1,2))
-            feeds[n] = v
+        feeds = load_feeds(feeds, model.converter.inputs)
 
     model.gen_float_c(feeds)
     if(feeds != None):
@@ -316,7 +299,7 @@ def caffe2lwnn(model, name, **kargs):
 
 if(__name__ == '__main__'):
     import argparse
-    parser = argparse.ArgumentParser(description='convert onnx to lwnn')
+    parser = argparse.ArgumentParser(description='convert caffe to lwnn')
     parser.add_argument('-i', '--input', help='input caffe model', type=str, required=True)
     parser.add_argument('-w', '--weights', help='input caffe weights', type=str, required=True)
     parser.add_argument('-o', '--output', help='output lwnn model', type=str, default=None, required=False)

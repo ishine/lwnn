@@ -17,4 +17,18 @@ objs = asenv.Library('cmsisnn', objs)
 
 objs += SConscript('image/SConscript')
 
+DISABLE_MKLDNN = True if os.getenv('DISABLE_MKLDNN') == 'True' else False
+if(not GetOption('android') and (not DISABLE_MKLDNN)):
+    cmd = 'mkdir -p build && cd build && cmake .. -G "Unix Makefiles" && make -i'
+    mkldnn = Package('https://github.com/intel/mkl-dnn.git', cmd=cmd)
+    asenv.Append(CPPPATH=['%s/include'%(mkldnn), 
+                          '%s/build/include'%(mkldnn),
+                          '%s/examples'%(mkldnn)])
+    asenv.Append(LIBPATH=['%s/build/src'%(mkldnn)])
+    if(IsPlatformWindows()):
+        asenv.Append(LIBS=['dnnl.dll'])
+    else:
+        asenv.Append(LIBS=['dnnl','mkldnn'])
+    objs += Glob('mkldnn_interface/*.cpp')
+
 Return('objs')

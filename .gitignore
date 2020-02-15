@@ -16,8 +16,11 @@ tmp
 download
 lwnn_gtest
 *.so
+*.so.*
 *.png
 *.jpg
 *.pyd
+*.dll
+*.asc
 
 
