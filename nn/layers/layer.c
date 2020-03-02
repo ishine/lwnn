@@ -191,6 +191,42 @@ size_t layer_get_size(const layer_t* layer)
 	return sz;
 }
 
+#ifndef DISABLE_DYNAMIC_SHAPE
+int layer_get_dynamic_axis(const layer_t* layer)
+{
+	int dim = 0;
+	int axis = -1;
+	const int* dims = layer->dims;
+
+	assert(dims != NULL);
+
+	while((dims[dim] != 0) && (dim < 4)) {
+		if(-1 == dims[dim]) {
+			axis = dim;
+		}
+		dim ++;
+	};
+
+	assert(dim >= 2);
+	if(axis > (dim-2)) {
+		axis = 3;
+	}
+
+	return axis;
+}
+
+void layer_set_dynamic_shape(const layer_t* layer, int axis, size_t total)
+{
+	size_t bs;
+	int* dims = (int*)&(layer->C->context->nhwc);
+	dims[axis] = 1;
+
+	bs = NHWC_SIZE(layer->C->context->nhwc);
+	assert(bs > 0);
+	assert((total%bs) == 0);
+	dims[axis] = total/bs;
+}
+#endif
 /* ============================ [ UNSUPPORTED/FALLBACK ] =========================================== */
 UNSUPPORTED_LAYER_OPS(cpu_s8, CONST)
 UNSUPPORTED_LAYER_OPS(cpu_q8, CONST)
@@ -199,7 +235,20 @@ UNSUPPORTED_LAYER_OPS(cpu_q16, CONST)
 UNSUPPORTED_LAYER_OPS(cpu_s8, DILCONV2D)
 UNSUPPORTED_LAYER_OPS(cpu_q8, DILCONV2D)
 UNSUPPORTED_LAYER_OPS(cpu_q16, DILCONV2D)
-UNSUPPORTED_LAYER_OPS(cl, DILCONV2D)
+
+UNSUPPORTED_LAYER_OPS(cpu_s8, PRELU)
+UNSUPPORTED_LAYER_OPS(cpu_q8, PRELU)
+UNSUPPORTED_LAYER_OPS(cpu_q16, PRELU)
+
+UNSUPPORTED_LAYER_OPS(cpu_s8, MFCC)
+UNSUPPORTED_LAYER_OPS(cpu_q8, MFCC)
+UNSUPPORTED_LAYER_OPS(cpu_q16, MFCC)
+UNSUPPORTED_LAYER_OPS(cl, MFCC)
+
+UNSUPPORTED_LAYER_OPS(cpu_s8, LSTM)
+UNSUPPORTED_LAYER_OPS(cpu_q8, LSTM)
+UNSUPPORTED_LAYER_OPS(cpu_q16, LSTM)
+UNSUPPORTED_LAYER_OPS(cl, LSTM)
 
 FALLBACK_LAYER_OPS_CPU_S8(DETECTIONOUTPUT, cpu_float)
 FALLBACK_LAYER_OPS_CPU_Q8(DETECTIONOUTPUT, cpu_float)

@@ -20,9 +20,10 @@ And for the purpose to support variant Deep Learning frameworks such as tensorfl
 | Conv2D | Y | Y | Y | Y | Y | |
 | DeConv2D | Y | Y | Y | Y | Y | |
 | DepthwiseConv2D | Y | Y | Y | Y | Y | |
-| DilatedConv2D | Y | N | N | N | N | |
+| DilatedConv2D | Y | N | N | N | Y | |
 | EltmentWise Max | Y | Y | Y | Y | Y | |
 | ReLU | Y | Y | Y | Y | Y | |
+| PReLU | Y | N | N | N | Y | |
 | MaxPool1D | Y | Y | Y | Y | Y | based on MaxPool2D |
 | MaxPool2D | Y | Y | Y | Y | Y | |
 | Dense | Y | Y | Y | Y | Y | |
@@ -39,6 +40,8 @@ And for the purpose to support variant Deep Learning frameworks such as tensorfl
 | Upsample | Y | Y | Y | Y | Y | |
 | Yolo | Y | N | N | N | F | |
 | YoloOutput | Y | N | N | N | F | |
+| Mfcc | Y | N | N | N | N | |
+| LSTM | Y | N | N | N | N | |
 
 * F means fallback to others runtime that supported that layer.
 
@@ -53,14 +56,28 @@ And for the purpose to support variant Deep Learning frameworks such as tensorfl
 
 * [YOLOv3](https://github.com/pjreddie/darknet) : [README](gtest/models/yolov3/README.md)
 
+* [ENET](https://github.com/TimoSaemann/ENet) : [README](gtest/models/enet/README.md)
+
+* [DeepSpeech](https://github.com/mozilla/DeepSpeech) : [README](gtest/models/deepspeech/README.md)
+
 Below is a list of command to run above models on OPENCL or CPU runtime.
 
 ```sh
+# objection detection
 lwnn_gtest --gtest_filter=*CL*SSDFloat -i images/dog.jpg
 lwnn_gtest --gtest_filter=*CPU*SSDFloat -i images/dog.jpg
 lwnn_gtest --gtest_filter=*CL*YOLOV3Float -i images/dog.jpg
 lwnn_gtest --gtest_filter=*CPU*YOLOV3Float -i images/dog.jpg
+# semantic segmentation
+lwnn_gtest --gtest_filter=*CL*ENETFloat -i ENet/example_image/munich_000000_000019_leftImg8bit.png
+lwnn_gtest --gtest_filter=*CPU*ENETFloat -i ENet/example_image/munich_000000_000019_leftImg8bit.png
+# speech to text
+lwnn_gtest --gtest_filter=*CPU*DSFloat -i speech_dataset/bird/042ea76c_nohash_0.wav
+stt 49/29:                                 b  irr  d
 ```
+
+Note: Those models has big accuracy drop when do quantization, I think quantization awareness training or something like TensorRT calibration is necessary.
+
 ## Development
 
 ### prepare environment

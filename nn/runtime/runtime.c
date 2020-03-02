@@ -178,14 +178,22 @@ int rte_load_raw(const char* name, void* data, size_t sz)
 void rte_save_raw(const char* name, void* data, size_t sz)
 {
 	FILE* fp;
-	fp = fopen(name, "wb");
-
+	fp = fopen(name, "ab+");
+	size_t r = 0;
 	if(fp != NULL)
 	{
-		fwrite(data, sz, 1, fp);
+		r = fwrite(data, sz, 1, fp);
+		if(1 != r) {
+			r = fwrite(data, sz/2, 1, fp);
+		}
+		if(1 != r) {
+			r = fwrite(data, sz/4, 1, fp);
+		}
+
 		fclose(fp);
 	}
-	else
+
+	if(1 != r)
 	{
 		printf("failed to save raw %s\n", name);
 	}
@@ -220,22 +228,22 @@ void rte_ddo_save(const nn_t* nn, const layer_t* layer)
 {
 	size_t sz = layer_get_size(layer);
 	int i;
-
-	if(L_DT_INT8 == nn->network->layers[0]->dtype)
-	{
-		/* pass */
-	}
-	else if(L_DT_INT16 == nn->network->layers[0]->dtype)
-	{
-		sz = sz*sizeof(int16_t);
-	}
-	else if(L_DT_FLOAT == nn->network->layers[0]->dtype)
-	{
-		sz = sz*sizeof(float);
-	}
-	else
-	{
-		assert(0);
+	switch(layer->C->context->dtype) {
+		case L_DT_INT16:
+		case L_DT_UINT16:
+			sz = sz * sizeof(int16_t);
+			break;
+		case L_DT_INT32:
+		case L_DT_UINT32:
+			sz = sz * sizeof(int32_t);
+			break;
+		case L_DT_FLOAT:
+			sz = sz * sizeof(float);
+			break;
+		case L_DT_STRING:
+			return;
+		default:
+			break;
 	}
 
 #ifndef DISABLE_RUNTIME_CPU

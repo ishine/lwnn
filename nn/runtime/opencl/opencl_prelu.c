@@ -1,6 +1,6 @@
 /**
  * LWNN - Lightweight Neural Network
- * Copyright (C) 2019  Parai Wang <parai@foxmail.com>
+ * Copyright (C) 2020  Parai Wang <parai@foxmail.com>
  */
 /* ============================ [ INCLUDES  ] ====================================================== */
 #include "nn.h"
@@ -10,52 +10,56 @@
 /* ============================ [ TYPES     ] ====================================================== */
 typedef struct {
 	LAYER_CL_CONTEXT_MEMBER;
-} layer_cl_upsample_context_t;
+	cl_mem W;
+} layer_cl_prelu_context_t;
 /* ============================ [ DECLARES  ] ====================================================== */
 /* ============================ [ DATAS     ] ====================================================== */
 /* ============================ [ LOCALS    ] ====================================================== */
 /* ============================ [ FUNCTIONS ] ====================================================== */
-int layer_cl_UPSAMPLE_init(const nn_t* nn, const layer_t* layer)
-{
-	const char* option = NULL;
-	if(NULL != layer->inputs[1])
-	{
-		option = "-DWITH_MASK";
-	}
-
-	return rte_cl_create_layer_common(nn, layer,
-			OPENCL_PATH "upsample.cl", "upsample2d", option,
-			sizeof(layer_cl_upsample_context_t));
-}
-int layer_cl_UPSAMPLE_execute(const nn_t* nn, const layer_t* layer)
+int layer_cl_PRELU_init(const nn_t* nn, const layer_t* layer)
 {
 	int r = 0;
-	layer_cl_upsample_context_t* context = (layer_cl_upsample_context_t*)layer->C->context;
+	layer_cl_prelu_context_t* context;
+
+	r = rte_cl_create_layer_common(nn, layer,
+				OPENCL_PATH "prelu.cl", "prelu", NULL,
+				sizeof(layer_cl_prelu_context_t));
+	if(0 == r)
+	{
+		context = (layer_cl_prelu_context_t*)layer->C->context;
+
+		context->W = rte_cl_create_image2d_from_blob(nn, layer->blobs[0]);
+		if(NULL == context->W)
+		{
+			r = NN_E_NO_MEMORY;
+		}
+
+		if(0 != r)
+		{
+			rte_cl_destory_layer_context(nn, layer);
+		}
+	}
+
+	return r;
+}
+
+int layer_cl_PRELU_execute(const nn_t* nn, const layer_t* layer)
+{
+	int r = 0;
+	layer_cl_prelu_context_t* context = (layer_cl_prelu_context_t*)layer->C->context;
 	const layer_t* input = layer->inputs[0];
 	layer_cl_context_t* input_context;
-	int strideX, strideY;
+	int nC4 = (context->nhwc.C+3)>>2;
 
 	input_context = (layer_cl_context_t*)input->C->context;
 
 	NNLOG(NN_DEBUG, ("execute %s\n", layer->name));
 
-	strideY = context->nhwc.H/input_context->nhwc.H;
-	strideX = context->nhwc.W/input_context->nhwc.W;
-
-	if(NULL != layer->inputs[1]) {
-		r = rte_cl_set_layer_args(nn, layer, RTE_CL_ARGS_WITH_C, 5,
+	r = rte_cl_set_layer_args(nn, layer, 0, 4,
 					sizeof(cl_mem), &(input_context->out[0]),
-					sizeof(cl_mem), &(layer->inputs[1]->C->context->out[1]),
+					sizeof(cl_mem), &(context->W),
 					sizeof(cl_mem), &(context->out[0]),
-					sizeof(int), &strideX,
-					sizeof(int), &strideY);
-	} else {
-		r = rte_cl_set_layer_args(nn, layer, RTE_CL_ARGS_WITH_C, 4,
-					sizeof(cl_mem), &(input_context->out[0]),
-					sizeof(cl_mem), &(context->out[0]),
-					sizeof(int), &strideX,
-					sizeof(int), &strideY);
-	}
+					sizeof(int), &nC4);
 
 	if(0 == r)
 	{
@@ -64,9 +68,18 @@ int layer_cl_UPSAMPLE_execute(const nn_t* nn, const layer_t* layer)
 
 	return r;
 }
-void layer_cl_UPSAMPLE_deinit(const nn_t* nn, const layer_t* layer)
+
+void layer_cl_PRELU_deinit(const nn_t* nn, const layer_t* layer)
 {
+	layer_cl_prelu_context_t* context;
+
+	context = (layer_cl_prelu_context_t*)layer->C->context;
+
+	if(NULL != context)
+	{
+		rte_cl_destory_memory(context->W);
+	}
+
 	rte_cl_destory_layer_context(nn, layer);
 }
-
 #endif /* DISABLE_RUNTIME_OPENCL */

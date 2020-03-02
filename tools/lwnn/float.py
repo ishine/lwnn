@@ -11,6 +11,10 @@ class LWNNFloatC(LWNNBaseC):
             LWNNBaseC.__init__(self, model, 'float', feeds)
         self.generate()
 
+    def get_padding_mode(self, layer):
+        map = {'SAME':0, 'VALID':1 }
+        return map[layer.padding]
+
     def gen_LayerConv(self, layer):
         W = layer['weights']
         B = layer['bias']
@@ -20,8 +24,13 @@ class LWNNFloatC(LWNNBaseC):
         else:
             strides = list(layer['strides'])
 
+        if(-1 in layer.shape):
+            pads = [0xdeadbeef,self.get_padding_mode(layer),0xdeadbeef,0xdeadbeef]
+        else:
+            pads = layer.pads
+
         isDilatedConv = False
-        misc = list(layer['pads']) + strides + [self.get_activation(layer)]
+        misc = list(pads) + strides + [self.get_activation(layer)]
         if('dilations' in layer):
             dilations = list(layer['dilations'])
             if(dilations != [1,1]):
@@ -53,7 +62,12 @@ class LWNNFloatC(LWNNBaseC):
         else:
             strides = list(layer['strides'])
 
-        M = np.asarray(list(layer['pads']) + strides + [self.get_activation(layer)], np.int32)
+        if(-1 in layer.shape):
+            pads = [0xdeadbeef,self.get_padding_mode(layer),0xdeadbeef,0xdeadbeef]
+        else:
+            pads = layer.pads
+
+        M = np.asarray(list(pads) + strides + [self.get_activation(layer)], np.int32)
         self.gen_layer_WBM(layer, W, B, M)
 
         op = 'DECONV2D'
@@ -71,3 +85,9 @@ class LWNNFloatC(LWNNBaseC):
     def gen_LayerConst(self, layer):
         self.gen_blobs(layer, [('%s_CONST'%(layer['name']), layer['const'])])
         self.fpC.write('L_CONST ({0});\n\n'.format(layer['name']))
+
+    def gen_LayerLSTM(self, layer):
+        n = layer.name
+        blobs = [('%s_W'%(n), layer.W), ('%s_R'%(n), layer.R), ('%s_B'%(n), layer.B)]
+        self.gen_blobs(layer, blobs)
+        self.fpC.write('L_LSTM ({0}, {1});\n\n'.format(layer['name'], layer['inputs'][0]))

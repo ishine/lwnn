@@ -288,6 +288,10 @@ int rte_cpu_create_layer_context(
 				assert(0);
 				break;
 		}
+		if(layer->dtype != L_DT_AUTO)
+		{
+			context->dtype = layer->dtype;
+		}
 		context->out = (void**)(((unsigned long long)context)+sz);
 		context->nout = nout;
 		if(nout > 0)
@@ -331,6 +335,7 @@ void rte_cpu_destory_layer_context(const nn_t* nn, const layer_t* layer)
 int rte_cpu_create_layer_common(const nn_t* nn, const layer_t* layer, size_t ctx_sz, size_t type_sz)
 {
 	int r = 0;
+	int bsz = 0;
 	layer_cpu_context_t* context;
 
 	r = rte_cpu_create_layer_context(nn, layer, ctx_sz, 1);
@@ -338,15 +343,20 @@ int rte_cpu_create_layer_common(const nn_t* nn, const layer_t* layer, size_t ctx
 	if(0 == r)
 	{
 		context = (layer_cpu_context_t*)layer->C->context;
+		bsz = NHWC_SIZE(context->nhwc)*type_sz;
+	}
+
+	if(bsz > 0)
+	{
 		#ifndef DISABLE_RTE_FALLBACK
 		if(RUNTIME_CPU != nn->runtime_type)
 		{
-			context->out[0] = malloc(NHWC_SIZE(context->nhwc)*type_sz);
+			context->out[0] = malloc(bsz);
 		}
 		else
 		{
 		#endif
-			context->out[0] = rte_cpu_create_buffer(nn, layer, NHWC_SIZE(context->nhwc)*type_sz);
+			context->out[0] = rte_cpu_create_buffer(nn, layer, bsz);
 		#ifndef DISABLE_RTE_FALLBACK
 		}
 		#endif
@@ -535,5 +545,69 @@ void rte_cpuq_to_cpu_float_post_execute_common(const nn_t* nn, const layer_t* la
 	}
 }
 #endif /* DISABLE_RTE_FALLBACK */
+
+#ifndef DISABLE_DYNAMIC_SHAPE
+void rte_cpu_dynamic_reshape(const layer_t* layer, layer_cpu_context_t* input_context) {
+	int axis = layer_get_dynamic_axis(layer);
+	if(axis > 0) {
+		layer_set_dynamic_shape(layer, axis, NHWC_SIZE(input_context->nhwc));
+	}
+}
+
+int rte_cpu_dynamic_conv2d(const layer_t* layer,
+		layer_cpu_context_t* context, layer_cpu_context_t* input_context,
+		int* padY, int* padX, int strideY, int strideX,
+		int knlY, int knlX, void** O, size_t* max, size_t type_sz) {
+	int r = 0;
+	int axis = layer_get_dynamic_axis(layer);
+	assert(axis != 3);
+	if(axis > 0) {
+		size_t bs;
+		assert(*padY == 0xdeadbeef);
+		if(0 == *padX) { /* SAME */
+			context->nhwc.N = input_context->nhwc.N;
+			context->nhwc.H = input_context->nhwc.H;
+			context->nhwc.W = input_context->nhwc.W;
+			*padY = ((context->nhwc.H-1)*strideY+knlY-input_context->nhwc.H)/2;
+			*padX = ((context->nhwc.W-1)*strideX+knlX-input_context->nhwc.W)/2;
+		} else { /* VALID */
+			context->nhwc.N = input_context->nhwc.N;
+			context->nhwc.H = (input_context->nhwc.H-knlY)/strideY + 1;
+			context->nhwc.W = (input_context->nhwc.W-knlX)/strideX + 1;
+			*padY = *padX = 0;
+		}
+		bs = NHWC_SIZE(context->nhwc);
+		if(NULL == *O) {
+			*O = malloc(bs*type_sz);
+			*max = bs;
+		} else {
+			if(bs > *max) {
+				free(*O);
+				*O = malloc(bs*type_sz);
+				*max = bs;
+			}
+		}
+		if(NULL == *O) {
+			r = NN_E_NO_MEMORY;
+			context->out[0] = NULL;
+		} else {
+			context->out[0] = *O;
+		}
+	}
+	return r;
+}
+void rte_cpu_dynamic_free(const layer_t* layer)
+{
+	int axis;
+	layer_cpu_context_t* context = (layer_cpu_context_t*)layer->C->context;
+	if(NULL != context) {
+		axis = layer_get_dynamic_axis(layer);
+		if(axis > 0) {
+			if(NULL != context->out[0]) free(context->out[0]);
+		}
+	}
+
+}
+#endif /* DISABLE_DYNAMIC_SHAPE */
 #endif /* DISABLE_RUNTIME_CPU */
 

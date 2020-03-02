@@ -11,7 +11,9 @@ class LWNNBaseC():
                 'Conv': self.gen_LayerConv,
                 'ConvTranspose': self.gen_LayerConvTranspose,
                 'Relu': self.gen_LayerRelu,
+                'PRelu': self.gen_LayerPRelu,
                 'MaxPool': self.gen_LayerMaxPool,
+                'Min': self.gen_LayerMin,
                 'AveragePool': self.gen_LayerAveragePool,
                 'Reshape': self.gen_LayerReshape,
                 'Dense': self.gen_LayerDense,
@@ -24,12 +26,26 @@ class LWNNBaseC():
                 'Yolo': self.gen_LayerYolo,
                 'YoloOutput': self.gen_LayerYoloOutput,
                 'DetectionOutput': self.gen_LayerDetectionOutput,
-                'Const': self.gen_LayerConst,
+                'Constant': self.gen_LayerConst,
+                'Mfcc': self.gen_LayerMfcc,
+                'LSTM': self.gen_LayerLSTM,
                 'Output': self.gen_LayerOutput }
         self.model = model
         self.T = T
         self.feeds = feeds
         self.name = os.path.basename(self.model.name)
+
+
+    def open(self, fix='.c', flags='w'):
+        if(fix != '.c'):
+            fix = '_' + fix
+        p = self.model.path + fix
+        print('LWNN %s'%(p))
+        fp = open(p, flags)
+        return fp
+
+    def close(self, fp):
+        fp.close()
 
     def get_activation(self, layer):
         actMap = { 'linear':0, 'Relu':1, 'leaky':2, }
@@ -40,12 +56,20 @@ class LWNNBaseC():
         return act
 
     def generate(self):
-        self.fpH = self.model.open('%s.h'%(self.T))
-        self.fpC = self.model.open('%s.c'%(self.T))
+        self.fpW = self.open('%s_builtin.h'%(self.T))
+        self.fpB = self.open('%s.bin'%(self.T), 'wb')
+        self.fpH = self.open('%s.h'%(self.T))
+        self.fpC = self.open('%s.c'%(self.T))
+        self.fpC.write('#include "nn.h"\n')
+        self.fpC.write('#ifndef L_BLOB_NOT_BUILTIN\n')
+        self.fpC.write('#include "%s"\n'%(os.path.basename(self.fpW.name)))
+        self.fpC.write('#endif\n')
         self.fpC.write('#include "%s"\n\n'%(os.path.basename(self.fpH.name)))
         self.gen()
-        self.model.close(self.fpH)
-        self.model.close(self.fpC)
+        self.close(self.fpH)
+        self.close(self.fpC)
+        self.close(self.fpW)
+        self.close(self.fpB)
         if(('1' == os.getenv('LWNN_GTEST')) and(self.T == 'float')):
             self.gen_goldens_for_gtest()
 
@@ -128,9 +152,14 @@ class LWNNBaseC():
 
     def gen_blob(self, name, blob):
         T = self.get_blob_type(blob)
-        self.fpH.write('static const %s %s[] = {'%(T, name))
-        self.fpH.write(', '.join(['%s'%(f) for f in blob.reshape(-1)]))
-        self.fpH.write('};\n')
+        self.fpW.write('#define l_blob_def_%s {'%(name))
+        self.fpW.write(', '.join(['%s'%(f) for f in blob.reshape(-1)]))
+        blob.tofile(self.fpB)
+        self.fpW.write('}\n')
+        self.fpH.write('#ifndef l_blob_def_%s\n'%(name))
+        self.fpH.write('#define l_blob_def_%s (%s)\n'%(name, '*'.join(['%s'%(s) for s in blob.shape])))
+        self.fpH.write('#endif\n')
+        self.fpH.write('L_BLOB_DECLARE(%s, %s);\n'%(T, name))
         self.fpH.write('static const int l_dims_%s[]={ %s,0 };\n'%(
             name, ','.join(['%s'%(s) for s in blob.shape])))
         if(T.endswith('_t')):
@@ -144,6 +173,7 @@ class LWNNBaseC():
     def gen_blobs(self, layer, blobs):
         if((self.T in ['q8', 's8', 'q16']) and
            (layer['op'] not in ['DetectionOutput', 'YoloOutput'])):
+            # for float and those fallback to float layers, no Q blob
             blobs = [self.get_Q_blob(layer)] + blobs
         for blob in blobs:
             self.gen_blob(*blob)
@@ -158,7 +188,7 @@ class LWNNBaseC():
     def get_blob_type(self, blob):
         if(blob.dtype == np.float32):
             return 'float'
-        elif(blob.dtype == np.int32):
+        elif((blob.dtype == np.int32) or (blob.dtype == np.int64)):
             return 'int32_t'
         elif(blob.dtype == np.int16):
             return 'int16_t'
@@ -186,12 +216,16 @@ class LWNNBaseC():
             t = 'int8_t'
         elif(self.T == 'q16'):
             t = 'int16_t'
+        if(('dtype' in layer) and (layer.dtype == 'string')):
+            t = 'void*' # for autod input
         return t
 
     def get_size(self, layer):
         sz = 1
         for s in layer['shape']:
             sz = sz*s
+        if((layer.op == 'Input') and ('dtype' in layer) and (layer.dtype == 'string')):
+            sz = 2
         return sz
 
     def gen_models(self):
@@ -207,7 +241,10 @@ class LWNNBaseC():
         self.fpC.write('\tNULL\n};\n\n')
         for layer in self.model.lwnn_model:
             if((layer['op'] == 'Output') or ('Output' in layer)):
-                self.fpC.write('static %s %s_output_buffer[%s];\n'%(self.get_type(layer), layer['name'], self.get_size(layer)))
+                if(self.get_size(layer) > 0):
+                    self.fpC.write('static %s %s_output_buffer[%s];\n'%(self.get_type(layer), layer['name'], self.get_size(layer)))
+                else:
+                    self.fpC.write('#define %s_output_buffer NULL\n'%(layer.name))
                 self.fpC.write('static const nn_output_t %s_output=\n{\n\tL_REF(%s), %s_output_buffer\n};\n'
                                %(layer['name'],layer['name'],layer['name']))
         self.fpC.write('static const nn_output_t* const %s_%s_outputs[] =\n{\n'%(self.name, self.T))
@@ -240,15 +277,23 @@ class LWNNBaseC():
             T = 'INT16'
         else:
             T = 'FLOAT'
+        if(('dtype' in layer) and (layer.dtype == 'string')):
+            T = 'STRING'
         self.fpC.write('L_INPUT ({0}, L_DT_{1});\n\n'.format(layer['name'], T))
 
     def gen_LayerConv(self, layer):
         raise NotImplementedError()
     def gen_LayerConvTranspose(self, layer):
         raise NotImplementedError()
+
     def gen_LayerRelu(self, layer):
         self.gen_no_blobs(layer)
         self.fpC.write('L_RELU ({0}, {1});\n\n'.format(layer['name'], layer['inputs'][0]))
+
+    def gen_LayerPRelu(self, layer):
+        weights = layer['weights']
+        self.gen_blobs(layer, [('%s_W'%(layer['name']),weights)])
+        self.fpC.write('L_PRELU ({0}, {1});\n\n'.format(layer['name'], layer['inputs'][0]))
 
     def gen_LayerMaxPool(self, layer):
         if('pads' not in layer):
@@ -261,6 +306,12 @@ class LWNNBaseC():
         M = np.asarray(list(layer['kernel_shape']) + pads + list(layer['strides']) + [with_mask], np.int32)
         self.gen_blobs(layer, [('%s_M'%(layer['name']),M)])
         self.fpC.write('L_MAXPOOL ({0}, {1});\n\n'.format(layer['name'], layer['inputs'][0]))
+
+    def gen_LayerMin(self, layer):
+        self.gen_no_blobs(layer)
+        self.fpC.write('#define {0}_INPUTS {1}\n'.format(layer['name'], 
+                        ','.join(['L_REF(%s)'%inp for inp in layer['inputs']])))
+        self.fpC.write('L_MINIMUM ({0}, {0}_INPUTS);\n\n'.format(layer['name']))
 
     def gen_LayerAveragePool(self, layer):
         if('pads' not in layer):
@@ -316,8 +367,7 @@ class LWNNBaseC():
         self.fpC.write('L_PAD ({0}, {1});\n\n'.format(layer['name'], layer['inputs'][0]))
 
     def gen_LayerSoftmax(self, layer):
-        M = np.asarray([layer['axis']], np.int8)
-        self.gen_blobs(layer, [('%s_M'%(layer['name']),M)])
+        self.gen_no_blobs(layer)
         self.fpC.write('L_SOFTMAX ({0}, {1});\n\n'.format(layer['name'], layer['inputs'][0]))
 
     def gen_LayerAdd(self, layer):
@@ -382,6 +432,18 @@ class LWNNBaseC():
         self.fpC.write('L_DETECTIONOUTPUT ({0}, {0}_INPUTS);\n\n'.format(layer['name']))
 
     def gen_LayerConst(self, layer):
+        raise NotImplementedError()
+
+    def gen_LayerMfcc(self, layer):
+        M = np.asarray([layer.magnitude_squared, layer.window_size,
+                        layer.stride, layer.desired_samples, layer.desired_channels,
+                        layer.upper_frequency_limit, layer.lower_frequency_limit, 
+                        layer.dct_coefficient_count, layer.filterbank_channel_count], 
+                        np.int32)
+        self.gen_blobs(layer, [('%s_M'%(layer['name']),M)])
+        self.fpC.write('L_MFCC ({0}, {1});\n\n'.format(layer['name'], layer['inputs'][0]))
+
+    def gen_LayerLSTM(self, layer):
         raise NotImplementedError()
 
     def gen_LayerOutput(self, layer):

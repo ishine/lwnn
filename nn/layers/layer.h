@@ -15,6 +15,12 @@ extern "C" {
 #define LCONST const
 #endif
 
+#ifndef L_BLOB_NOT_BUILTIN
+#define L_BLOB_DECLARE(type, name) static const type name[] = l_blob_def_##name
+#else
+#define L_BLOB_DECLARE(type, name) static type name[l_blob_def_##name]
+#endif
+
 #define L_INPUT(name, dtype)							\
 	static layer_context_container_t l_context_##name;	\
 	static LCONST int l_dims_##name[] = { name##_DIMS, 0 };	\
@@ -59,6 +65,7 @@ extern "C" {
 #define L_OUTPUT(name, input)		L_LAYER_SI(name, input, OUTPUT)
 #define L_CONV2D(name, input)		L_LAYER_SI(name, input, CONV2D)
 #define L_RELU(name, input)			L_LAYER_SI(name, input, RELU)
+#define L_PRELU(name, input)		L_LAYER_SI(name, input, PRELU)
 #define L_MAXPOOL(name, input)		L_LAYER_SI(name, input, MAXPOOL)
 #define L_AVGPOOL(name, input)		L_LAYER_SI(name, input, AVGPOOL)
 #define L_RESHAPE(name, input)		L_LAYER_SI(name, input, RESHAPE)
@@ -71,11 +78,18 @@ extern "C" {
 #define L_DECONV2D(name, input)		L_LAYER_SI(name, input, DECONV2D)
 #define L_BATCHNORM(name, input)	L_LAYER_SI(name, input, BATCHNORM)
 #define L_DILCONV2D(name, input)	L_LAYER_SI(name, input, DILCONV2D)
+#define L_MFCC(name, input)			L_LAYER_SI(name, input, MFCC)
+#define L_LSTM(name, input)			L_LAYER_SI(name, input, LSTM)
 
 #define L_MAXIMUM(name, inputs)							\
 	static LCONST layer_t* l_inputs_##name[] = {		\
 			inputs, NULL };								\
 	L_LAYER_MI(name, MAXIMUM)
+
+#define L_MINIMUM(name, inputs)							\
+	static LCONST layer_t* l_inputs_##name[] = {		\
+			inputs, NULL };								\
+	L_LAYER_MI(name, MINIMUM)
 
 #define L_ADD(name, inputs)								\
 	static LCONST layer_t* l_inputs_##name[] = {		\
@@ -138,6 +152,10 @@ extern "C" {
 #define NHWC_SIZE(nhwc) (((nhwc).N)*((nhwc).H)*((nhwc).W)*((nhwc).C))
 
 #define NHWC_BATCH_SIZE(nhwc) (((nhwc).H)*((nhwc).W)*((nhwc).C))
+
+#define NHWC_LIST(nhwc) (nhwc).N, (nhwc).H, (nhwc).W, (nhwc).C
+
+#define L_SHAPES(layer) NHWC_LIST(layer->C->context->nhwc)
 
 #define UNSUPPORTED_LAYER_OPS(runtime, op)									\
 int layer_##runtime##_##op##_init(const nn_t* nn, const layer_t* layer)		\
@@ -206,6 +224,7 @@ typedef enum
 	L_DT_UINT32,
 	L_DT_FLOAT,
 	L_DT_DOUBLE,
+	L_DT_STRING, /* for audio input */
 	L_DT_AUTO
 } layer_data_type_t;
 
@@ -214,10 +233,15 @@ typedef enum
 	L_ACT_NONE  = 0,
 	L_ACT_RELU  = 1,
 	L_ACT_LEAKY = 2,
+	L_ACT_SIGMOID = 3,
+	L_ACT_TANH = 4,
 } layer_activation_type_t;
 
 typedef const int* layer_dimension_t;
 
+#ifdef L_BLOB_NOT_BUILTIN
+typedef int (* nn_blob_loader_t)(void* provider, void* saver, size_t size);
+#endif
 typedef struct layer_blob {
 	const layer_dimension_t dims;	/* 0 terminated */
 	layer_data_type_t dtype;
@@ -270,6 +294,10 @@ typedef struct
 int layer_get_blob_NHWC(const layer_blob_t* blob, NHWC_t* nhwc);
 int layer_get_NHWC(const layer_t* layer, NHWC_t* nhwc);
 size_t layer_get_size(const layer_t* layer);
+#ifndef DISABLE_DYNAMIC_SHAPE
+int layer_get_dynamic_axis(const layer_t* layer);
+void layer_set_dynamic_shape(const layer_t* layer, int axis, size_t total);
+#endif
 #ifdef __cplusplus
 }
 #endif
