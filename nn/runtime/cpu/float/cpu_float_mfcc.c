@@ -226,7 +226,11 @@ static int extract_features(const layer_t* layer, layer_cpu_float_mfcc_context_t
 	int16_t* wav_data = (int16_t*)wav->data;
 	float* mfcc_out = (float*)context->out[0];
 
-	nframes = (wav->size/2 - context->param->window_size/2 + frame_shift/3)/frame_shift;
+	if(-1 == context->param->desired_samples) {
+		nframes = (wav->size/2 - context->param->window_size/2 + frame_shift/3)/frame_shift;
+	} else {
+		nframes = (wav->size/2 + frame_shift/3)/frame_shift;
+	}
 
 	if(-1 == layer->dims[1]) { /* dynamic number of features */
 		if(NULL == mfcc_out) {
@@ -261,6 +265,7 @@ static int extract_features(const layer_t* layer, layer_cpu_float_mfcc_context_t
 
 	return r;
 }
+
 /* ============================ [ FUNCTIONS ] ====================================================== */
 int layer_cpu_float_MFCC_init(const nn_t* nn, const layer_t* layer)
 {
@@ -273,10 +278,19 @@ int layer_cpu_float_MFCC_init(const nn_t* nn, const layer_t* layer)
 		context = (layer_cpu_float_mfcc_context_t*)layer->C->context;
 		memset(&((layer_cpu_context_t*)context)[1], 0,
 				sizeof(layer_cpu_float_mfcc_context_t)-sizeof(layer_cpu_context_t));
-
-		context->param = (const mfcc_param_t*)layer->blobs[0]->blob;
+		if(NETWORK_TYPE_FLOAT == nn->network->type) {
+			context->param = (const mfcc_param_t*)layer->blobs[0]->blob;
+		} else {
+			context->param = (const mfcc_param_t*)layer->blobs[1]->blob;
+		}
+		#if !defined(DISABLE_RTE_FALLBACK) && !defined(DISABLE_RUNTIME_OPENCL)
+		if(RUNTIME_OPENCL == nn->runtime_type) { /* those are used for fallback */
+			scratch_size += sizeof(float)*NHWC_SIZE(context->nhwc) + sizeof(void*);
+		}
+		#endif
 		frame_len = context->param->window_size;
 		context->frame_len_padded = pow(2,ceil((log(frame_len)/log(2))));
+
 		scratch_size += sizeof(float)*context->frame_len_padded;
 		scratch_size += sizeof(float)*context->frame_len_padded;
 		scratch_size += sizeof(float)*context->param->filterbank_channel_count;
@@ -322,13 +336,17 @@ int layer_cpu_float_MFCC_execute(const nn_t* nn, const layer_t* layer)
 {
 	int r = 0;
 	layer_cpu_float_mfcc_context_t* context = (layer_cpu_float_mfcc_context_t*)layer->C->context;
-	layer_cpu_context_t* input_context = (layer_cpu_context_t*)layer->inputs[0]->C->context;
 
-	wav_t* wav = input_context->out[0];
+	wav_t* wav = nn_get_input_data(nn, layer);
 
 	NNLOG(NN_DEBUG, ("execute %s: wav_data %d@%p\n",layer->name, (int)wav->size, wav->data));
 
 	context->frame = (float*)nn->scratch.area;
+	#if !defined(DISABLE_RTE_FALLBACK) && !defined(DISABLE_RUNTIME_OPENCL)
+	if(RUNTIME_OPENCL == nn->runtime_type) { /* skip those which are used for fallback */
+		context->frame = (float*)(((size_t)context->frame) + sizeof(float)*NHWC_SIZE(context->nhwc) + sizeof(void*));
+	}
+	#endif
 	context->buffer = context->frame + context->frame_len_padded;
 	context->mel_energies = context->buffer + context->frame_len_padded;
 

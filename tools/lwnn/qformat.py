@@ -4,23 +4,23 @@
 from .base import *
 
 class LWNNQFormatC(LWNNBaseC):
-    def __init__(self, model, T, feeds):
+    def __init__(self, model, T):
         try:
-            super().__init__(model, T, feeds)
+            super().__init__(model, T)
         except:
-            LWNNBaseC.__init__(self, model, T, feeds)
+            LWNNBaseC.__init__(self, model, T)
         lwnn_model = self.model.clone()
-        self.model.optimize(['RemoveReshape'])
+        self.model.optimize(['RemoveReshape', 'RemoveMin'])
         if(T == 's8'):
             self.model.optimize(['MergeReLUConv','MergeReLUDense'])
-        self.calculate_output_encoding(feeds)
+        self.calculate_output_encoding()
         self.fix_linked_to_the_same_Q()
         self.generate()
         self.model.set(lwnn_model)
 
-    def calculate_output_encoding(self, feeds):
+    def calculate_output_encoding(self):
         self.output_encodings = {}
-        self.outputs = self.model.run(feeds)
+        self.outputs = self.model.outputs
         for n,v in self.outputs.items():
             _,vq = self.quantize(v, True)
             self.output_encodings[n] = vq
@@ -29,10 +29,10 @@ class LWNNQFormatC(LWNNBaseC):
         Q = self.output_encodings[layer['outputs'][at]]
         if('inputs' in layer):
             inputs = self.model.get_layers(layer['inputs'])
-        if((layer['op'] == 'Softmax') or
+        if((layer['op'] in ['Softmax', 'LSTM']) or
            ((layer['op'] == 'Output') and 
             (len(inputs) == 1) and 
-            (inputs[0]['op'] == 'Softmax'))):
+            (inputs[0]['op'] in ['Softmax', 'LSTM']))):
             Q = eval(self.T[1:])-1
         return Q
 
@@ -240,7 +240,8 @@ class LWNNQFormatC(LWNNBaseC):
         else:
             const,constQ = self.quantize(const)
             Q = self.get_encoding(layer)
-            assert(constQ == Q)
+            if(constQ != Q):
+                raise Exception('%s: constQ %s != Q %s'%(layer, constQ, Q))
         self.gen_blobs(layer, [('%s_CONST'%(layer['name']), const)])
         self.fpC.write('L_CONST ({0});\n\n'.format(layer['name']))
 
@@ -271,12 +272,83 @@ class LWNNQFormatC(LWNNBaseC):
         self.gen_blobs(layer, blobs)
         self.fpC.write('L_BATCHNORM ({0}, {1});\n\n'.format(layer['name'], layer['inputs'][0]))
 
+    def LSTMHelper(self, layer):
+        # according to onnx.backend.test.case.node.lstm.LSTM_Helper
+        def sigmoid(x):
+            return 1 / (1 + np.exp(-x))
+        cmin = 0
+        cmax = 0
+        gmin = 0
+        gmax = 0
+        if(layer.inputs[0] in self.outputs):
+            X = self.outputs[layer.inputs[0]]
+        else:
+            inp = self.model.get_layers(layer.inputs[0])
+            X = self.outputs[inp.outputs[0]]
+        X = X.reshape(-1,1,X.shape[-1])
+        W,R,B = layer.W,layer.R,layer.B
+        I,H,O = X.shape[-1], int(B.shape[-1]/8), R.shape[-1]
+        # currently only support 1 direction
+        W = W.reshape(4*H, I)
+        R = R.reshape(4*H, O)
+        B = layer.B[:, :4*H]+layer.B[:, 4*H:]
+        if('P' in layer):
+            p_i, p_o, p_f = layer.P
+        else:
+            p_i=p_o=p_f=np.zeros(H)
+        C_t = np.zeros((1,H))
+        H_t = np.zeros((1,O))
+        for x in X:
+            gates = np.dot(x, np.transpose(W)) + np.dot(H_t, np.transpose(R)) + B
+            gmin = min(gates.min(), gmin)
+            gmax = max(gates.max(), gmax)
+            i, o, f, c = np.split(gates, 4, -1)
+            i = sigmoid(i + p_i * C_t)
+            f = sigmoid(f + p_f * C_t)
+            c = np.tanh(c)
+            C = f * C_t + i * c
+            o = sigmoid(o + p_o * C)
+            H = o * np.tanh(C)
+            H_t = H
+            C_t = C
+            cmin = min(C_t.min(), cmin)
+            cmax = max(C_t.max(), cmax)
+        _, Cq = self.quantize(np.asarray([cmin, cmax]), only_needQ=True)
+        _, Gq = self.quantize(np.asarray([gmin, gmax]), only_needQ=True)
+        return Cq,Gq
+
+    def gen_LayerLSTM(self, layer):
+        n = layer.name
+        Cq,Gq = self.LSTMHelper(layer)
+        W = np.concatenate([layer.W, layer.R], axis=2)
+        H = int(layer.B.shape[-1]/8)
+        Wb,Rb = layer.B[:, :4*H],layer.B[:, 4*H:]
+        B = Wb + Rb
+        Wt,Wq = self.quantize(W)
+        Wt = self.convert_to_x4_weights(Wt.reshape(Wt.shape[1],-1,1,1))
+        Wt = Wt.reshape(W.shape)
+        B,Bq = self.quantize(B)
+        blobs = [('%s_W'%(n), Wt), ('%s_B'%(n), B), 
+                 ('%s_M'%(n), np.asarray([Wq,Bq,Cq,Gq], np.int8))]
+        extra_id = []
+        extra_blobs = []
+        for i,wn in [(0,'P'), (1,'PRJECTION')]:
+            if(wn in layer):
+                w,wq = self.quantize(layer[wn])
+                extra_id.append([i, wq])
+                extra_blobs.append(('%s_%s'%(n,wn), w))
+        if(len(extra_id) > 0):
+            blobs.append(('%s_ExtraId'%(n), np.asarray(extra_id, np.int32)))
+            blobs.extend(extra_blobs)
+        self.gen_blobs(layer, blobs)
+        self.fpC.write('L_LSTM ({0}, {1});\n\n'.format(layer['name'], layer['inputs'][0]))
+
 class LWNNQSFormatC(LWNNQFormatC):
-    def __init__(self, model, feeds):
+    def __init__(self, model):
         try:
-            super().__init__(model, 's8', feeds)
+            super().__init__(model, 's8')
         except:
-            LWNNQFormatC.__init__(self, model, 's8', feeds)
+            LWNNQFormatC.__init__(self, model, 's8')
 
     def quantize_QSZ(self, v):
         if(v is None): # layer fallback to float
@@ -303,11 +375,11 @@ class LWNNQSFormatC(LWNNQFormatC):
         VQ = np.clip(VQ-Z, cmin, cmax).astype(np.int8)
         return VQ, scale, vq, Z
 
-    def calculate_output_encoding(self, feeds):
+    def calculate_output_encoding(self):
         self.output_encodings = {}
         self.output_offsets = {}
         self.output_scales = {}
-        self.outputs = self.model.run(feeds)
+        self.outputs = self.model.outputs
         for n,v in self.outputs.items():
             _,scale,Q,Z = self.quantize_QSZ(v)
             self.output_offsets[n] = Z

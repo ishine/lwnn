@@ -8,6 +8,16 @@ from lwnn2onnx import *
 import pickle
 import traceback
 
+__all__ = ['LWNNUtil', 'LWNNLayer', 'LWNNModel', 'load_feeds', 'LWNNFeeder', 'cstr']
+
+def cstr(name):
+    for s in ['/',':', '-', '.']:
+        name = name.replace(s, '_')
+    fc = name[0]
+    if(fc.isdigit()):
+        name = '_' + name
+    return name
+
 class LWNNUtil():
     def LN(self, name):
         '''return lwnn type layer name'''
@@ -95,20 +105,31 @@ class LWNNUtil():
             layer = self.lwnn_model[id]
             for isopt, optact, oname in self.OPTIMIER:
                 if((((oname == None) and (len(additions) == 0)) 
-                    or (oname in additions)) and isopt(layer)):
+                    or (oname in additions) or (isopt == self.opt_IsLayerUnused))
+                    and isopt(layer)):
                     r = optact(layer)
                     if(True == r): # if there is remove action, restart optimization
                         id = -1
                         num_layers = len(self.lwnn_model)
                         break
 
-    def toCstr(self, name):
-        for s in ['/',':', '-', '.']:
-            name = name.replace(s, '_')
-        fc = name[0]
-        if(fc.isdigit()):
-            name = '_' + name
-        return name
+    def clone_layer(self, layer):
+        L = LWNNLayer()
+        for k,v in layer.items():
+            if(type(v) in [list, tuple]):
+                L[k] = list(v)
+            else:
+                L[k] = v
+        return L
+
+    def clone(self):
+        model = []
+        for ly in self.lwnn_model:
+            model.append(self.clone_layer(ly))
+        return model
+
+    def c_str(self, name):
+        return cstr(name)
 
 class LWNNLayer(dict):
     def __init__(self, **kwargs):
@@ -130,7 +151,10 @@ class LWNNLayer(dict):
         def kv2s(k, v):
             cstr = ''
             try:
-                cstr += '%s=t%s, '%(k, v.shape)
+                if((len(v.shape)==1) and (v.shape[0] < 4)):
+                    cstr += '%s=t%s, '%(k, v)
+                else:
+                    cstr += '%s=t%s, '%(k, v.shape)
             except:
                 if(k in ['top', 'topq']):
                     cstr += '%s=[ '%(k)
@@ -180,18 +204,20 @@ class LWNNModel(LWNNUtil):
             (self.opt_IsLayerClipRelu, self.opt_LayerClip2Relu, None),
             (self.opt_IsLayerFlatten, self.opt_LayerFlatten2Reshape, None),
             (self.opt_IsLayerPad, self.opt_LayerPad, None),
+            (self.opt_IsLayerMfcc, self.opt_LayerMfcc, None),
             (self.opt_IsLayerReshapeBeforeSoftmax, self.opt_PermuteReshapeSoftmax, 'PermuteReshapeSoftmax'),
             (self.opt_IsLayerTransposeCanBeRemoved, self.opt_RemoveLayer, 'RemoveTranspose'),
             (self.opt_IsLayerIdentity, self.opt_RemoveLayer, 'RemoveIdentity'),
             (self.opt_IsLayerReshape, self.opt_RemoveLayer, 'RemoveReshape'),
             (self.opt_IsLayerReLUConv, self.opt_MergeReLUConv, 'MergeReLUConv'),
             (self.opt_IsLayerReLUDense, self.opt_MergeReLUDense, 'MergeReLUDense'),
+            (self.opt_IsLayerMinCanBeRemoved, self.opt_RemoveLayer, 'RemoveMin'),
             ]
         self.is_model_channel_first_cached=None
         self.converter = converter
-        self.name = self.toCstr(name)
+        self.name = self.c_str(name)
         self.converter.save(self.path)
-        self.lwnn_model = self.converter.convert()
+        self.lwnn_model = self.converter.model
         # optimization and convert to NCHW if origin model is NHWC
         self.prepare()
         self.omodel = self.clone()
@@ -199,6 +225,12 @@ class LWNNModel(LWNNUtil):
             self.optimize(['RemoveIdentity'])
         if(not (('notPermuteReshapeSoftmax' in kwargs) and (kwargs['notPermuteReshapeSoftmax']==True))):
             self.optimize(['PermuteReshapeSoftmax'])
+        if('feeds' in kwargs):
+            self.feeds = kwargs['feeds']
+        else:
+            self.feeds = None
+        self.outputs = None
+        self.try_calculate_outputs()
         self.omodel = self.clone()
         self.optimize()
         self.omodel = self.clone()
@@ -206,6 +238,18 @@ class LWNNModel(LWNNUtil):
         self.optimize(['RemoveTranspose'])
         self.check()
         print(self)
+
+    def try_calculate_outputs(self):
+        if(self.feeds is None):
+            return
+        self.outputs = self.run(self.feeds)
+        for n,v in self.outputs.items():
+            if(v is not None):
+                for layer in self.lwnn_model:
+                    if(n == layer.outputs[0]):
+                        layer.q_min = float(v.min())
+                        layer.q_max = float(v.max())
+                        break
 
     def save(self):
         try:
@@ -230,23 +274,8 @@ class LWNNModel(LWNNUtil):
         O = self.converter.run(feed, model=model)
         outputs = {}
         for k,v in O.items():
-            outputs[self.toCstr(k)] = v
+            outputs[self.c_str(k)] = v
         return outputs
-
-    def clone_layer(self, layer):
-        L = LWNNLayer()
-        for k,v in layer.items():
-            if(type(v) in [list, tuple]):
-                L[k] = list(v)
-            else:
-                L[k] = v
-        return L
-
-    def clone(self):
-        model = []
-        for ly in self.lwnn_model:
-            model.append(self.clone_layer(ly))
-        return model
 
     def set(self, model):
         self.lwnn_model = model
@@ -265,13 +294,18 @@ class LWNNModel(LWNNUtil):
                 raise Exception('Fatal Error: can\'t create directory <%s>'%(d))
         return p
 
-    def gen_float_c(self, feeds=None):
-        LWNNFloatC(self, feeds)
+    def gen_float_c(self):
+        LWNNFloatC(self)
 
-    def gen_quantized_c(self, feeds):
-        LWNNQFormatC(self, 'q8', feeds)
-        LWNNQFormatC(self, 'q16', feeds)
-        LWNNQSFormatC(self, feeds)
+    def gen_quantized_c(self):
+        LWNNQFormatC(self, 'q8')
+        LWNNQFormatC(self, 'q16')
+        LWNNQSFormatC(self)
+
+    def generate(self):
+        self.gen_float_c()
+        if(self.outputs != None):
+            self.gen_quantized_c()
 
     def nchw_IsInputAdjustLayer(self, layer):
         r = False
@@ -420,6 +454,16 @@ class LWNNModel(LWNNUtil):
     def opt_MergeReLUDense(self, layer):
         return self.opt_MergeActivation(layer, 'Relu')
 
+    def opt_IsLayerMinCanBeRemoved(self, layer):
+        r = False
+        if((layer.op == 'Min') and ('q_max' in layer)):
+            inputs = self.get_layers(layer.inputs)
+            for inp in inputs:
+                if((inp.op == 'Constant') and (layer.q_max <= inp.q_min)):
+                    r = True
+                    break
+        return r
+
     def opt_IsLayerConvBeforeBN(self, layer):
         r = False
         consumers = self.get_consumers(layer)
@@ -557,13 +601,13 @@ class LWNNModel(LWNNUtil):
         r = False
         if(layer['op'] == 'Conv'):
             r = True
+        if('WeightsReordered' in layer):
+            r = False
         return r
 
     def opt_LayerConvWeightsReorder(self, layer):
         # Conv: [M x C/group x kH x kW] -> [M x kH x kW x C/group]
         # DwConv: [M x C/group x kH x kW] -> [C/group x kH x kW x M]
-        if('WeightsReordered' in layer):
-            return False
         W = layer['weights']
         if(len(W.shape)==4):
             W = W.transpose(0,2,3,1)
@@ -719,8 +763,8 @@ class LWNNModel(LWNNUtil):
     def opt_IsLayerConcatWithOneOnly(self, layer):
         r = False
         if(layer['op'] == 'Concat'):
-            inputs = self.get_layers(layer['inputs'])
-            if(len(inputs) == 1):
+            inputs = layer['inputs']
+            if(len(inputs) == inputs.count(inputs[0])):
                 r = True
         return r
 
@@ -769,26 +813,39 @@ class LWNNModel(LWNNUtil):
             r = True
         return r
 
+    def opt_IsLayerMfcc(self, layer):
+        r = False
+        if((layer.op == 'Mfcc') and ('inputs' in layer)):
+            r = True
+        return r
+
+    def opt_LayerMfcc(self, layer):
+        inputs = self.get_layers(layer.inputs)
+        for inp in inputs:
+            self.lwnn_model.remove(inp)
+        del layer['inputs']
+        return True
+
     def check(self):
         for id,layer in enumerate(self.lwnn_model):
             if('inputs' in layer):
                 # check that inputs are before me
                 LI = layer['inputs']
-                inputs = self.get_layers(LI,self.lwnn_model[:id])
                 eLI = []
                 for inp in LI:
                     if(inp not in eLI):
                         eLI.append(inp)
+                inputs = self.get_layers(eLI,self.lwnn_model[:id])
                 if(len(eLI) != len(inputs)):
                     raise Exception('layer %s inputs is not before me:\n%s'%(layer['name'], self))
 
     def prepare(self):
         # everthing is fine, fix name
         for layer in self.lwnn_model:
-            layer['name'] = self.toCstr(layer['name'])
+            layer['name'] = self.c_str(layer['name'])
             if('inputs' in layer):
-                layer['inputs'] = [self.toCstr(inp) for inp in layer['inputs']]
-            layer['outputs'] = [self.toCstr(out) for out in layer['outputs']]
+                layer['inputs'] = [self.c_str(inp) for inp in layer['inputs']]
+            layer['outputs'] = [self.c_str(out) for out in layer['outputs']]
         self.is_model_channel_first()
 
     def __str__(self, model=None):

@@ -29,6 +29,7 @@ class LWNNBaseC():
                 'Constant': self.gen_LayerConst,
                 'Mfcc': self.gen_LayerMfcc,
                 'LSTM': self.gen_LayerLSTM,
+                'Transpose': self.gen_LayerTranspose,
                 'Output': self.gen_LayerOutput }
         self.model = model
         self.T = T
@@ -172,7 +173,7 @@ class LWNNBaseC():
 
     def gen_blobs(self, layer, blobs):
         if((self.T in ['q8', 's8', 'q16']) and
-           (layer['op'] not in ['DetectionOutput', 'YoloOutput'])):
+           (layer['op'] not in ['DetectionOutput', 'Yolo', 'YoloOutput'])):
             # for float and those fallback to float layers, no Q blob
             blobs = [self.get_Q_blob(layer)] + blobs
         for blob in blobs:
@@ -190,6 +191,8 @@ class LWNNBaseC():
             return 'float'
         elif((blob.dtype == np.int32) or (blob.dtype == np.int64)):
             return 'int32_t'
+        elif(blob.dtype == np.uint32):
+            return 'uint32_t'
         elif(blob.dtype == np.int16):
             return 'int16_t'
         elif(blob.dtype == np.int8):
@@ -216,27 +219,27 @@ class LWNNBaseC():
             t = 'int8_t'
         elif(self.T == 'q16'):
             t = 'int16_t'
-        if(('dtype' in layer) and (layer.dtype == 'string')):
-            t = 'void*' # for autod input
+        if(layer.op == 'Mfcc'):
+            t = 'void*' # for audio input
         return t
 
     def get_size(self, layer):
         sz = 1
         for s in layer['shape']:
             sz = sz*s
-        if((layer.op == 'Input') and ('dtype' in layer) and (layer.dtype == 'string')):
+        if(layer.op == 'Mfcc'):
             sz = 2
         return sz
 
     def gen_models(self):
         for layer in self.model.lwnn_model:
-            if(layer['op'] == 'Input'):
+            if(layer['op'] in ['Input', 'Mfcc']):
                 self.fpC.write('static %s %s_input_buffer[%s];\n'%(self.get_type(layer), layer['name'], self.get_size(layer)))
                 self.fpC.write('static const nn_input_t %s_input=\n{\n\tL_REF(%s), %s_input_buffer\n};\n'
                                %(layer['name'],layer['name'],layer['name']))
         self.fpC.write('static const nn_input_t* const %s_%s_inputs[] =\n{\n'%(self.name, self.T))
         for layer in self.model.lwnn_model:
-            if(layer['op'] == 'Input'):
+            if(layer['op'] in ['Input', 'Mfcc']):
                 self.fpC.write('\t&%s_input,\n'%(layer['name']))
         self.fpC.write('\tNULL\n};\n\n')
         for layer in self.model.lwnn_model:
@@ -277,8 +280,6 @@ class LWNNBaseC():
             T = 'INT16'
         else:
             T = 'FLOAT'
-        if(('dtype' in layer) and (layer.dtype == 'string')):
-            T = 'STRING'
         self.fpC.write('L_INPUT ({0}, L_DT_{1});\n\n'.format(layer['name'], T))
 
     def gen_LayerConv(self, layer):
@@ -441,10 +442,30 @@ class LWNNBaseC():
                         layer.dct_coefficient_count, layer.filterbank_channel_count], 
                         np.int32)
         self.gen_blobs(layer, [('%s_M'%(layer['name']),M)])
-        self.fpC.write('L_MFCC ({0}, {1});\n\n'.format(layer['name'], layer['inputs'][0]))
+        self.fpC.write('L_MFCC ({0});\n\n'.format(layer['name']))
 
     def gen_LayerLSTM(self, layer):
         raise NotImplementedError()
+
+    def gen_LayerTranspose(self, layer):
+        perm = list(layer.perm)
+        if(len(perm) == 3):
+            if(perm == [0,2,1]):
+                ptype = 0
+            else:
+                raise
+        elif(len(perm) == 4):
+            if(perm == [0,3,1,2]): # from NHWC to NCHW
+                ptype = 0
+            elif(perm == [0,2,3,1]): # from NCHW to NHWC
+                ptype = 0x8000
+            else:
+                raise
+        else:
+            raise
+        M = np.asarray([ptype], np.int32)
+        self.gen_blobs(layer, [('%s_M'%(layer['name']),M)])
+        self.fpC.write('L_TRANSPOSE ({0}, {1});\n\n'.format(layer['name'], layer['inputs'][0]))
 
     def gen_LayerOutput(self, layer):
         self.gen_no_blobs(layer)
