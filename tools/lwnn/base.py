@@ -16,6 +16,7 @@ class LWNNBaseC():
                 'Min': self.gen_LayerMin,
                 'AveragePool': self.gen_LayerAveragePool,
                 'Reshape': self.gen_LayerReshape,
+                'Squeeze': self.gen_LayerReshape,
                 'Dense': self.gen_LayerDense,
                 'Concat': self.gen_LayerConcat,
                 'Pad': self.gen_LayerPad,
@@ -30,6 +31,10 @@ class LWNNBaseC():
                 'Mfcc': self.gen_LayerMfcc,
                 'LSTM': self.gen_LayerLSTM,
                 'Transpose': self.gen_LayerTranspose,
+                'Detection': self.gen_LayerDetection,
+                'Proposal': self.gen_LayerProposal,
+                'RoiAlign': self.gen_LayerRoiAlign,
+                'Slice': self.gen_LayerSlice,
                 'Output': self.gen_LayerOutput }
         self.model = model
         self.T = T
@@ -49,11 +54,11 @@ class LWNNBaseC():
         fp.close()
 
     def get_activation(self, layer):
-        actMap = { 'linear':0, 'Relu':1, 'leaky':2, }
+        actMap = { 'linear':0, 'relu':1, 'leaky':2, 'sigmoid':3, 'tanh':4 }
         if('activation' not in layer):
             act = 0 # 0 means no activation
         else:
-            act = actMap[layer['activation']]
+            act = actMap[layer['activation'].lower()]
         return act
 
     def generate(self):
@@ -150,6 +155,28 @@ class LWNNBaseC():
     def gen(self):
         self.gen_layers()
         self.gen_models()
+
+    def create_blobs_from_attrs(self, layer, attrs):
+        n = layer.name
+        blobs = []
+        for k in attrs:
+            V = layer[k]
+            if(type(V) in [list, tuple]):
+                if(all(isinstance(v, int) for v in V)):
+                    blobs.append(('%s_%s'%(n,k), np.asarray(V, np.int32)))
+                else:
+                    blobs.append(('%s_%s'%(n,k), np.asarray(V, np.float32)))
+            elif(type(V)==np.ndarray):
+                if(V.dtype == np.float64):
+                    V = V.astype(np.float32)
+                elif(V.dtype == np.int64):
+                    V = V.astype(np.int32)
+                blobs.append(('%s_%s'%(n,k), V))
+            elif(type(V)==int):
+                blobs.append(('%s_%s'%(n,k), np.asarray([V], np.int32)))
+            else:
+                blobs.append(('%s_%s'%(n,k), np.asarray([V], np.float32)))
+        return blobs
 
     def gen_blob(self, name, blob):
         T = self.get_blob_type(blob)
@@ -446,6 +473,20 @@ class LWNNBaseC():
 
     def gen_LayerLSTM(self, layer):
         raise NotImplementedError()
+
+    def gen_LayerDetection(self, layer):
+        raise NotImplementedError()
+
+    def gen_LayerProposal(self, layer):
+        raise NotImplementedError()
+
+    def gen_LayerRoiAlign(self, layer):
+        raise NotImplementedError()
+
+    def gen_LayerSlice(self, layer):
+        M = np.asarray([layer.starts, layer.ends, layer.axes], np.int32)
+        self.gen_blobs(layer, [('%s_M'%(layer['name']),M)])
+        self.fpC.write('L_SLICE ({0}, {1});\n\n'.format(layer['name'], layer['inputs'][0]))
 
     def gen_LayerTranspose(self, layer):
         perm = list(layer.perm)
