@@ -5,7 +5,7 @@ import os
 import numpy as np
 
 class LWNNBaseC():
-    def __init__(self, model, T, feeds = None):
+    def __init__(self, model, T):
         self.GENL = {
                 'Input': self.gen_LayerInput,
                 'Conv': self.gen_LayerConv,
@@ -33,12 +33,12 @@ class LWNNBaseC():
                 'Transpose': self.gen_LayerTranspose,
                 'Detection': self.gen_LayerDetection,
                 'Proposal': self.gen_LayerProposal,
-                'RoiAlign': self.gen_LayerRoiAlign,
+                'PyramidROIAlign': self.gen_LayerPyramidRoiAlign,
                 'Slice': self.gen_LayerSlice,
                 'Output': self.gen_LayerOutput }
         self.model = model
         self.T = T
-        self.feeds = feeds
+        self.feeds = model.feeds
         self.name = os.path.basename(self.model.name)
 
 
@@ -480,7 +480,7 @@ class LWNNBaseC():
     def gen_LayerProposal(self, layer):
         raise NotImplementedError()
 
-    def gen_LayerRoiAlign(self, layer):
+    def gen_LayerPyramidRoiAlign(self, layer):
         raise NotImplementedError()
 
     def gen_LayerSlice(self, layer):

@@ -24,7 +24,7 @@ static pthread_once_t _once = PTHREAD_ONCE_INIT;
 static py::module _rpn;
 /* ============================ [ LOCALS    ] ====================================================== */
 template<typename T>
-static py::array create_1d_array(T* data, size_t ndim) {
+static py::array create_1d_array(const T* data, size_t ndim) {
     auto arr = py::array_t<T>({ndim});
     py::buffer_info arr_info = arr.request();
     T* arr_data = (T*) arr_info.ptr;
@@ -33,7 +33,16 @@ static py::array create_1d_array(T* data, size_t ndim) {
 }
 
 template<typename T>
-static py::array create_3d_array(T* data, size_t dim0, size_t dim1, size_t dim2) {
+static py::array create_2d_array(const T* data, size_t dim0, size_t dim1) {
+    auto arr = py::array_t<T>({dim0, dim1});
+    py::buffer_info arr_info = arr.request();
+    T* arr_data = (T*) arr_info.ptr;
+    std::copy(data, data+arr_info.size, arr_data);
+    return arr;
+}
+
+template<typename T>
+static py::array create_3d_array(const T* data, size_t dim0, size_t dim1, size_t dim2) {
     auto arr = py::array_t<T>({dim0, dim1, dim2});
     py::buffer_info arr_info = arr.request();
     T* arr_data = (T*) arr_info.ptr;
@@ -146,7 +155,7 @@ extern "C" int rpn_generate_anchors(const nn_t* nn, const layer_t* layer, float*
   return r;
 }
 
-extern "C" int rpn_proposal_forward(const nn_t* nn, const layer_t* layer, float* anchors, size_t n_anchors)
+extern "C" int _rpn_proposal_forward(const nn_t* nn, const layer_t* layer, float* anchors, size_t n_anchors)
 {
   int r = 0;
   pthread_once(&_once, setup_pyenv);
@@ -161,10 +170,11 @@ extern "C" int rpn_proposal_forward(const nn_t* nn, const layer_t* layer, float*
   py::buffer_info arr_info = roi.request();
 
   if((3==arr_info.ndim) && (context->nhwc.N==arr_info.shape[0]) &&
-     (context->nhwc.H==arr_info.shape[1]) && (context->nhwc.C==arr_info.shape[2])) {
+     (layer->dims[1]>=arr_info.shape[1]) && (context->nhwc.C==arr_info.shape[2])) {
     float* data = (float*)arr_info.ptr;
     float* O = (float*)context->out[0];
     std::copy(data, data+arr_info.size, O);
+    context->nhwc.H = arr_info.shape[1];
   } else {
     r = NN_E_INVALID_DIMENSION;
   }

@@ -4,29 +4,43 @@
  */
 /* ============================ [ INCLUDES  ] ====================================================== */
 #include "nn.h"
-#ifndef DISABLE_RUNTIME_CPU_FLOAT
-#include "../runtime_cpu.h"
+#include "runtime_halide.h"
+#include "algorithm.h"
 /* ============================ [ MACROS    ] ====================================================== */
 /* ============================ [ TYPES     ] ====================================================== */
 typedef struct {
-	LAYER_CPU_CONTEXT_MEMBER;
-} layer_cpu_float_detection_context_t;
+	LAYER_HALIDE_CONTEXT_MEMBER;
+} layer_halide_input_context_t;
 /* ============================ [ DECLARES  ] ====================================================== */
 /* ============================ [ DATAS     ] ====================================================== */
 /* ============================ [ LOCALS    ] ====================================================== */
 /* ============================ [ FUNCTIONS ] ====================================================== */
-int layer_cpu_float_DETECTION_init(const nn_t* nn, const layer_t* layer)
+int layer_halide_INPUT_init(const nn_t* nn, const layer_t* layer)
 {
-	return rte_cpu_create_layer_common(nn, layer, sizeof(layer_cpu_float_detection_context_t), sizeof(float));
+	return rte_halide_create_layer_common(nn, layer, sizeof(layer_halide_input_context_t));
 }
 
-int __weak layer_cpu_float_DETECTION_execute(const nn_t* nn, const layer_t* layer)
+int layer_halide_INPUT_execute(const nn_t* nn, const layer_t* layer)
 {
-	return NN_E_NOT_SUPPORTED;
-}
-void layer_cpu_float_DETECTION_deinit(const nn_t* nn, const layer_t* layer)
-{
-	rte_cpu_destory_layer_context(nn, layer);
+	int r = 0;
+	layer_halide_input_context_t* context = (layer_halide_input_context_t*)layer->C->context;
+	float* data;
+	Halide::Buffer<float>* in = (Halide::Buffer<float>*)context->out[0];
+
+	data = (float*) nn_get_input_data(nn, layer);
+	if(NULL != data)
+	{
+		std::copy(data, data+NHWC_SIZE(context->nhwc), in->begin());
+	}
+	else
+	{
+		r = NN_E_NO_INPUT_BUFFER_PROVIDED;
+	}
+
+	return r;
 }
 
-#endif /* DISABLE_RUNTIME_CPU_FLOAT */
+void layer_halide_INPUT_deinit(const nn_t* nn, const layer_t* layer)
+{
+	rte_halide_destory_layer_context(nn, layer);
+}

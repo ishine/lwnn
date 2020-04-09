@@ -9,6 +9,9 @@ __all__ = ['keras2lwnn']
 
 class KerasConverter(LWNNUtil):
     def __init__(self, keras_model, **kwargs):
+        self.OPTIMIER = [
+            (self.opt_IsLayerSliceBeforeROIAfterDetection, self.opt_LayerSliceBeforeROIAfterDetection, None),
+            ]
         self.opMap = {
             'InputLayer': 'Input',
             'Conv2D': 'Conv',
@@ -20,7 +23,6 @@ class KerasConverter(LWNNUtil):
             'UpSampling2D': 'Upsample',
             'ProposalLayer': 'Proposal',
             'DetectionLayer': 'Detection',
-            'PyramidROIAlign': 'RoiAlign',
             }
         self.TRANSLATOR = {
             'Input': self.to_LayerInput,
@@ -35,6 +37,8 @@ class KerasConverter(LWNNUtil):
             'Concat': self.to_LayerConcat,
             'MaxPool': self.to_LayerMaxPool,
             'Proposal': self.to_LayerProposal,
+            'Detection': self.to_LayerDetection,
+            'PyramidROIAlign': self.to_LayerPyramidROIAlign,
              }
         self.keras_model = keras_model
         if('shape_infers' in kwargs):
@@ -183,6 +187,13 @@ class KerasConverter(LWNNUtil):
         layer.RPN_NMS_THRESHOLD = config.RPN_NMS_THRESHOLD
         layer.inputs = layer.inputs[:2]
 
+    def to_LayerDetection(self, layer):
+        layer.shape[-1] = 7
+        layer.inputs = layer.inputs[:-1]
+
+    def to_LayerPyramidROIAlign(self, layer):
+        layer.inputs = layer.inputs[:1] + layer.inputs[2:]
+
     def to_LayerBatchNormalization(self, layer):
         klconfig = layer.klconfig
         klweights = layer.klweights
@@ -222,6 +233,10 @@ class KerasConverter(LWNNUtil):
                     else:
                         axis = i
                 layer.shape[axis] = dims
+            # special handling for MaskRCNN
+            consumers = self.get_consumers(layer)
+            if((len(consumers) > 0) and all('TimeDistributed' in l for l in consumers)):
+                layer.shape = layer.shape[1:]
         elif(op1 == 'strided_slice'):
             layer.op = 'Slice'
             inp = self.get_layers(layer.inputs[0])
@@ -268,6 +283,18 @@ class KerasConverter(LWNNUtil):
         layer.klconfig=tlayer['config']
         self.lwnn_model.append(layer)
 
+    def opt_IsLayerSliceBeforeROIAfterDetection(self, layer):
+        r = False
+        if(layer.op == 'Slice'):
+            inp = self.get_layers(layer.inputs[0])
+            consumers = self.get_consumers(layer)
+            if((len(consumers)==1) and (inp.op=='Detection') and (consumers[0].op=='PyramidROIAlign')):
+                r = True
+        return r
+
+    def opt_LayerSliceBeforeROIAfterDetection(self, layer):
+        return self.opt_RemoveLayer(layer)
+
     def convert(self):
         self.lwnn_model = []
         for klayer in self.keras_model.layers:
@@ -285,19 +312,25 @@ class KerasConverter(LWNNUtil):
         for layer in self.lwnn_model:
             inputs = self.get_layer_inputs(layer)
             layer.inputs = [l.name for l in inputs]
+            if(layer.op == 'Output'):
+                layer.shape = inputs[0].shape
+        for layer in self.lwnn_model:
             if(layer.op in self.TRANSLATOR):
                 self.TRANSLATOR[layer.op](layer)
+            if(('TimeDistributed' in layer) or (len(layer.shape) == 5)):
+                layer.shape = layer.shape[1:]
+            elif(('inputs' in layer) and all('TimeDistributed' in l for l in self.get_layers(layer.inputs))):
+                layer.shape = layer.shape[1:]
             if(layer.op == 'Output'):
+                inputs = self.get_layers(layer.inputs)
                 layer.shape = inputs[0].shape
             else:
                 del layer['klweights']
                 del layer['klconfig']
-            if(('TimeDistributed' in layer) or (len(layer.shape) == 5)):
-                layer.shape = layer.shape[1:]
         for layer in self.lwnn_model:
             layer.shape = [int(s) for s in layer.shape]
-            if(layer.op in ['Squeeze']):  continue
             self.convert_layer_to_nchw(layer)
+        self.optimize()
 
 def keras2lwnn(model, name, feeds=None, **kwargs):
     if(type(model) == str):

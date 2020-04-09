@@ -55,6 +55,9 @@ typedef struct {
 	size_t flags;
 } nnt_model_args_t;
 /* ============================ [ DECLARES  ] ====================================================== */
+extern "C" int ROIAlign_forward_cpu(float* o, const float* in,
+                                    const float* boxes, const int* indices,
+                                    NHWC_t* onhwc, NHWC_t* inhwc);
 static void* load_input(nn_t* nn, const char* path, int id, size_t* sz);
 static void* load_ssd_input(nn_t* nn, const char* path, int id, size_t* sz);
 static void* load_yolov3_input(nn_t* nn, const char* path, int id, size_t* sz);
@@ -387,7 +390,7 @@ static void* load_ds_input(nn_t* nn, const char* path, int id, size_t* sz)
 					if(NULL != outputs) {
 						memcpy(outputs, network->outputs[0]->layer->C->context->out[0], *sz);
 					}
-					printf("Feature extraction cost total %.3fms\n",trun_sum/1000000);
+					printf("Feature extraction cost total %.3fms\n",(float)trun_sum/1000000);
 				}
 				nn_destory(dsnn);
 			}
@@ -429,6 +432,7 @@ static void* load_maskrcnn_input(nn_t* nn, const char* path, int id, size_t* sz)
 			input[i+1] = resized_im->data[i+1]-116.8;
 			input[i+2] = resized_im->data[i+2]-103.9;
 		}
+
 		image_close(im);
 		image_close(resized_im);
 		*sz = sizeof(float)*NHWC_BATCH_SIZE(context->nhwc);
@@ -711,6 +715,107 @@ static int ds_compare(nn_t* nn, int id, float * output, size_t szo, float* glode
 
 static int maskrcnn_compare(nn_t* nn, int id, float * output, size_t szo, float* gloden, size_t szg)
 {
+	image_t* im;
+	layer_context_t* context = (layer_context_t*)nn->network->inputs[0]->layer->C->context;
+	char* pos;
+	float* mrcnn_detection = (float*)nn->network->outputs[1]->data;
+	float* mrcnn_mask = (float*)nn->network->outputs[3]->data;
+	int num_det = nn->network->outputs[1]->layer->C->context->nhwc.N;
+	static const char* class_names[] = {"BG", "person", "bicycle", "car", "motorcycle", "airplane",
+			"bus", "train", "truck", "boat", "traffic light",
+			"fire hydrant", "stop sign", "parking meter", "bench", "bird",
+			"cat", "dog", "horse", "sheep", "cow", "elephant", "bear",
+			"zebra", "giraffe", "backpack", "umbrella", "handbag", "tie",
+			"suitcase", "frisbee", "skis", "snowboard", "sports ball",
+			"kite", "baseball bat", "baseball glove", "skateboard",
+			"surfboard", "tennis racket", "bottle", "wine glass", "cup",
+			"fork", "knife", "spoon", "bowl", "banana", "apple",
+			"sandwich", "orange", "broccoli", "carrot", "hot dog", "pizza",
+			"donut", "cake", "chair", "couch", "potted plant", "bed",
+			"dining table", "toilet", "tv", "laptop", "mouse", "remote",
+			"keyboard", "cell phone", "microwave", "oven", "toaster",
+			"sink", "refrigerator", "book", "clock", "vase", "scissors",
+			"teddy bear", "hair drier", "toothbrush"};
+	int H = nn->network->inputs[0]->layer->C->context->nhwc.H;
+	int W = nn->network->inputs[0]->layer->C->context->nhwc.W;
+	int mH = nn->network->outputs[3]->layer->C->context->nhwc.H;
+	int mW = nn->network->outputs[3]->layer->C->context->nhwc.W;
+	int mC = nn->network->outputs[3]->layer->C->context->nhwc.C;
+	assert(mC == ARRAY_SIZE(class_names));
+	pos = strstr((char*)g_InputImagePath, ".raw");
+	if(NULL != pos) {
+		/* pass */
+	} else {
+		im = image_open(g_InputImagePath);
+		assert(im != NULL);
+		float scale = std::min((float)H/im->h, (float)W/im->w);
+		float y_top = (H-scale*im->h)/2;
+		float x_top = (W-scale*im->w)/2;
+		float y_bottom = y_top + scale*im->h;
+		float x_bottom = x_top + scale*im->w;
+
+		for(int i=0; i<num_det; i++)
+		{
+			float batch = mrcnn_detection[7*i];
+			int label = mrcnn_detection[7*i+1];
+			float prop = mrcnn_detection[7*i+2];
+
+			int y1 = (int)std::round((mrcnn_detection[7*i+3]*H-y_top)/scale);
+			int x1 = (int)std::round((mrcnn_detection[7*i+4]*W-x_top)/scale);
+			int y2 = (int)std::round((mrcnn_detection[7*i+5]*H-y_top)/scale);
+			int x2 = (int)std::round((mrcnn_detection[7*i+6]*W-x_top)/scale);
+
+			int x = std::max(x1,0);
+			int y = std::max(y1,0);
+			int w = std::min(std::max(x2-x1,0), im->w);
+			int h = std::min(std::max(y2-y1,0), im->h);
+
+			const char* name = "unknow";
+			if(label < ARRAY_SIZE(class_names))
+			{
+				name = class_names[label];
+			}
+
+			printf("predict L=%s(%d) P=%.2f @%d %d %d %d\n", name, label, prop, x, y, w, h);
+			image_draw_rectange(im, x, y, w, h, 0x00FF00);
+			char text[128];
+			snprintf(text, sizeof(text), "%s %.1f%%", name, prop*100);
+			image_draw_text(im, x, y, text,  0xFF0000);
+
+			float* o = new float[w*h];
+			float* in = new float[mW*mH];
+			float boxes[4] = {0.f,0.f,1.f,1.f};
+			int indices[1] = {0};
+			NHWC_t onhwc = {1,h,w,1};
+			NHWC_t inhwc = {1,mH,mW,1};
+			for(int mx=0; mx<mH; mx++) {
+				for(int my=0; my<mW; my++) {
+					in[my*mW+mx] = mrcnn_mask[((i*mH+my)*mW+mx)*mC+label];
+				}
+			}
+			(void)ROIAlign_forward_cpu(o, in, boxes, indices, &onhwc, &inhwc);
+			for(int dx=0; dx<w; dx++) {
+				for(int dy=0; dy<h; dy++) {
+					float mask = o[dy*w+dx];
+					if(mask > 0.5) {
+						image_draw_pixel(im, x+dx, y+dy, 0x4000FF00);
+					}
+				}
+			}
+			delete []o;
+			delete []in;
+		}
+
+		image_save(im, "predictions.png");
+		printf("checking predictions.png for %s\n", g_InputImagePath?:"null");
+		#ifdef _WIN32
+		system("predictions.png");
+		#else
+		system("eog predictions.png");
+		#endif
+		image_close(im);
+	}
+
 	return 0;
 }
 /* ============================ [ FUNCTIONS ] ====================================================== */

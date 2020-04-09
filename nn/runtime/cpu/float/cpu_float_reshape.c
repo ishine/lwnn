@@ -35,7 +35,7 @@ int layer_cpu_float_RESHAPE_init(const nn_t* nn, const layer_t* layer)
 		if(NULL != input_context->out[0])
 		{
 			/* reuse its input layer's output buffer */
-			rte_cpu_take_buffer(input_context->out[0], layer);
+			rte_cpu_take_buffer(input_context->out[0], layer, 0);
 		}
 	}
 
@@ -51,9 +51,7 @@ int layer_cpu_float_RESHAPE_execute(const nn_t* nn, const layer_t* layer)
 
 	float* IN = (float*)input_context->out[0];
 
-#ifndef DISABLE_DYNAMIC_SHAPE
 	rte_cpu_dynamic_reshape(layer, input_context);
-#endif
 
 	NNLOG(NN_DEBUG, ("execute %s: %d %d %d %d\n", layer->name, L_SHAPES(layer)));
 

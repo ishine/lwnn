@@ -82,7 +82,7 @@ def RunCommand(cmd, e=True):
         raise Exception('FAIL of RunCommand "%s" = %s'%(cmd, ret))
     return ret
 
-def MKObject(src, tgt, cmd, rm=True):
+def MKObject(src, tgt, cmd, rm=True, e=True):
     if(GetOption('clean') and rm):
         RMFile(tgt)
         return
@@ -98,7 +98,7 @@ def MKObject(src, tgt, cmd, rm=True):
     else:
         mtime2 = -1
     if(mtime2 < mtime):
-        RunCommand(cmd)
+        RunCommand(cmd, e)
 
 def AppendPythonPath(lp):
     try:
@@ -406,7 +406,11 @@ def AddPythonDev(env):
             pylib = 'python'+sys.version[0:3]+'m'
         if(pylib in env.get('LIBS',[])): return
         env.Append(CPPPATH=['%s/include/%s'%(pyp,pylib)])
-        env.Append(LIBPATH=['%s/lib'%(pyp)])
+        if(pyp == '/usr'):
+            env.Append(LIBPATH=['%s/lib/x86_64-linux-gnu'%(pyp)])
+            env.Append(CPPPATH=['%s/local/include/%s'%(pyp,pylib[:9])])
+        else:
+            env.Append(LIBPATH=['%s/lib'%(pyp)])
         istr = 'export'
     print('%s PYTHONHOME=%s if see error " Py_Initialize: unable to load the file system codec"'%(istr, pyp))
     env.Append(LIBS=[pylib, 'stdc++', 'dl', 'm'])

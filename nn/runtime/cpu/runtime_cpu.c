@@ -432,10 +432,12 @@ void* rte_cpu_create_buffer(const nn_t* nn, const layer_t* layer, size_t sz)
 	return buffer;
 }
 
-void rte_cpu_take_buffer(rte_cpu_buffer_t* buffer, const layer_t* layer)
+void rte_cpu_take_buffer(rte_cpu_buffer_t* buffer, const layer_t* layer, int id)
 {
 	assert(buffer != NULL);
 	buffer->owner = layer;
+	assert(id < layer->C->context->nout);
+	layer->C->context->out[id] = buffer;
 }
 
 void rte_cpu_release_buffer(rte_cpu_buffer_t* buffer)
@@ -608,6 +610,17 @@ void rte_cpu_dynamic_reshape(const layer_t* layer, layer_cpu_context_t* input_co
 	if(axis > 0) {
 		layer_set_dynamic_shape(layer, axis, NHWC_SIZE(input_context->nhwc));
 	}
+
+	if(L_OP_OUTPUT == layer->op) {
+		layer->C->context->nhwc = input_context->nhwc;
+	} else {
+		layer->C->context->nhwc.N = input_context->nhwc.N;
+		assert(NHWC_SIZE(input_context->nhwc) == NHWC_SIZE(layer->C->context->nhwc));
+	}
+}
+
+void rte_cpu_dynamic_batch(const layer_t* layer, layer_cpu_context_t* input_context) {
+	layer->C->context->nhwc.N = input_context->nhwc.N;
 }
 
 int rte_cpu_dynamic_conv2d(const layer_t* layer,
@@ -648,6 +661,14 @@ int rte_cpu_dynamic_conv2d(const layer_t* layer,
 			context->out[0] = NULL;
 		} else {
 			context->out[0] = *O;
+		}
+	} else {
+		if(context->nhwc.N != input_context->nhwc.N) {
+			if(layer->dims[0] > input_context->nhwc.N) {
+				context->nhwc.N = input_context->nhwc.N;
+			} else {
+				r = NN_E_INVALID_DIMENSION;
+			}
 		}
 	}
 	return r;
