@@ -37,6 +37,23 @@ static void prelu_ref(float * data, size_t size, float* slope, int C)
 	}
 }
 
+static void clip_ref(float* data, size_t size, float min, float max)
+{
+	size_t  i;
+
+	for (i = 0; i < size; i++)
+	{
+		if (data[i] < min) {
+			data[i] = min;
+		}
+		else if (data[i] > max) {
+			data[i] = max;
+		} else {
+			/* pass */
+		}
+	}
+}
+
 static int layer_cpu_float_activation_init(const nn_t* nn, const layer_t* layer)
 {
 	int r =0;
@@ -73,13 +90,11 @@ static int layer_cpu_float_activation_execute(const nn_t* nn, const layer_t* lay
 	size_t sz = NHWC_SIZE(input_context->nhwc);
 	float* IN;
 
-	rte_cpu_dynamic_reshape(layer, input_context);
+	rte_cpu_dynamic_shape_copy(layer, input_context);
 
 	IN = (float*)input_context->out[0];
 
 	context->out[0] = IN;	/* yes, reuse its input's output buffer directly */
-
-	NNLOG(NN_DEBUG, ("execute %s\n", layer->name));
 
 	switch(layer->op)
 	{
@@ -91,6 +106,13 @@ static int layer_cpu_float_activation_execute(const nn_t* nn, const layer_t* lay
 			float* slope = (float*)layer->blobs[0]->blob;
 			assert(layer->blobs[0]->dims[0] == context->nhwc.C);
 			prelu_ref(IN, sz, slope, context->nhwc.C);
+			break;
+		}
+		case L_OP_CLIP:
+		{
+			float min = RTE_FETCH_FLOAT(layer->blobs[0]->blob, 0);
+			float max = RTE_FETCH_FLOAT(layer->blobs[0]->blob, 1);
+			clip_ref(IN, sz, min, max);
 			break;
 		}
 		default:
@@ -132,6 +154,21 @@ int layer_cpu_float_PRELU_execute(const nn_t* nn, const layer_t* layer)
 }
 
 void layer_cpu_float_PRELU_deinit(const nn_t* nn, const layer_t* layer)
+{
+	layer_cpu_float_activation_deinit(nn, layer);
+}
+
+int layer_cpu_float_CLIP_init(const nn_t* nn, const layer_t* layer)
+{
+	return layer_cpu_float_activation_init(nn, layer);
+}
+
+int layer_cpu_float_CLIP_execute(const nn_t* nn, const layer_t* layer)
+{
+	return layer_cpu_float_activation_execute(nn, layer);
+}
+
+void layer_cpu_float_CLIP_deinit(const nn_t* nn, const layer_t* layer)
 {
 	layer_cpu_float_activation_deinit(nn, layer);
 }

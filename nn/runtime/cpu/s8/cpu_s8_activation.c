@@ -27,6 +27,23 @@ static void relu_s8(int8_t* data, size_t sz, int8_t zero)
 	}
 }
 
+static void clip_s8_ref(int8_t* data, size_t size, int8_t min, int8_t max)
+{
+	size_t  i;
+
+	for (i = 0; i < size; i++)
+	{
+		if (data[i] < min) {
+			data[i] = min;
+		}
+		else if (data[i] > max) {
+			data[i] = max;
+		} else {
+			/* pass */
+		}
+	}
+}
+
 static int layer_cpu_s8_activation_init(const nn_t* nn, const layer_t* layer)
 {
 	int r =0;
@@ -65,13 +82,18 @@ static int layer_cpu_s8_activation_execute(const nn_t* nn, const layer_t* layer)
 
 	context->out[0] = IN;	/* yes, reuse its input's output buffer directly */
 
-	NNLOG(NN_DEBUG, ("execute %s\n", layer->name));
-
 	switch(layer->op)
 	{
 		case L_OP_RELU:
 			relu_s8(IN, sz, -LAYER_Z(layer));
 			break;
+		case L_OP_CLIP:
+		{
+			int8_t min = RTE_FETCH_INT8(layer->blobs[1]->blob, 0);
+			int8_t max = RTE_FETCH_INT8(layer->blobs[1]->blob, 1);
+			clip_s8_ref(IN, sz, min, max);
+			break;
+		}
 		default:
 			r = NN_E_INVALID_LAYER;
 			break;
@@ -96,6 +118,21 @@ int layer_cpu_s8_RELU_execute(const nn_t* nn, const layer_t* layer)
 }
 
 void layer_cpu_s8_RELU_deinit(const nn_t* nn, const layer_t* layer)
+{
+	layer_cpu_s8_activation_deinit(nn, layer);
+}
+
+int layer_cpu_s8_CLIP_init(const nn_t* nn, const layer_t* layer)
+{
+	return layer_cpu_s8_activation_init(nn, layer);
+}
+
+int layer_cpu_s8_CLIP_execute(const nn_t* nn, const layer_t* layer)
+{
+	return layer_cpu_s8_activation_execute(nn, layer);
+}
+
+void layer_cpu_s8_CLIP_deinit(const nn_t* nn, const layer_t* layer)
 {
 	layer_cpu_s8_activation_deinit(nn, layer);
 }

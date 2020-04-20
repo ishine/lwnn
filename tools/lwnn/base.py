@@ -11,9 +11,11 @@ class LWNNBaseC():
                 'Conv': self.gen_LayerConv,
                 'ConvTranspose': self.gen_LayerConvTranspose,
                 'Relu': self.gen_LayerRelu,
+                'Clip': self.gen_LayerClip,
                 'PRelu': self.gen_LayerPRelu,
                 'MaxPool': self.gen_LayerMaxPool,
                 'Min': self.gen_LayerMin,
+                'Mul': self.gen_LayerMul,
                 'AveragePool': self.gen_LayerAveragePool,
                 'Reshape': self.gen_LayerReshape,
                 'Squeeze': self.gen_LayerReshape,
@@ -261,8 +263,12 @@ class LWNNBaseC():
     def gen_models(self):
         for layer in self.model.lwnn_model:
             if(layer['op'] in ['Input', 'Mfcc']):
-                self.fpC.write('static %s %s_input_buffer[%s];\n'%(self.get_type(layer), layer['name'], self.get_size(layer)))
-                self.fpC.write('static const nn_input_t %s_input=\n{\n\tL_REF(%s), %s_input_buffer\n};\n'
+                if(-1 in layer.shape):
+                    self.fpC.write('static nn_input_t %s_input=\n{\n\tL_REF(%s), NULL\n};\n'
+                               %(layer['name'],layer['name']))
+                else:
+                    self.fpC.write('static %s %s_input_buffer[%s];\n'%(self.get_type(layer), layer['name'], self.get_size(layer)))
+                    self.fpC.write('static const nn_input_t %s_input=\n{\n\tL_REF(%s), %s_input_buffer\n};\n'
                                %(layer['name'],layer['name'],layer['name']))
         self.fpC.write('static const nn_input_t* const %s_%s_inputs[] =\n{\n'%(self.name, self.T))
         for layer in self.model.lwnn_model:
@@ -271,11 +277,12 @@ class LWNNBaseC():
         self.fpC.write('\tNULL\n};\n\n')
         for layer in self.model.lwnn_model:
             if((layer['op'] == 'Output') or ('Output' in layer)):
-                if(self.get_size(layer) > 0):
-                    self.fpC.write('static %s %s_output_buffer[%s];\n'%(self.get_type(layer), layer['name'], self.get_size(layer)))
+                if(-1 in layer.shape):
+                    self.fpC.write('static nn_output_t %s_output=\n{\n\tL_REF(%s), NULL\n};\n'
+                               %(layer['name'],layer['name']))
                 else:
-                    self.fpC.write('#define %s_output_buffer NULL\n'%(layer.name))
-                self.fpC.write('static const nn_output_t %s_output=\n{\n\tL_REF(%s), %s_output_buffer\n};\n'
+                    self.fpC.write('static %s %s_output_buffer[%s];\n'%(self.get_type(layer), layer['name'], self.get_size(layer)))
+                    self.fpC.write('static const nn_output_t %s_output=\n{\n\tL_REF(%s), %s_output_buffer\n};\n'
                                %(layer['name'],layer['name'],layer['name']))
         self.fpC.write('static const nn_output_t* const %s_%s_outputs[] =\n{\n'%(self.name, self.T))
         for layer in self.model.lwnn_model:
@@ -318,6 +325,19 @@ class LWNNBaseC():
         self.gen_no_blobs(layer)
         self.fpC.write('L_RELU ({0}, {1});\n\n'.format(layer['name'], layer['inputs'][0]))
 
+    def gen_LayerClip(self, layer):
+        if('min' in layer):
+            mi = layer['min']
+        else:
+            mi = -np.inf
+        if('max' in layer):
+            mx = layer['max']
+        else:
+            mx = np.inf
+        M = np.asarray([mi,mx], np.float32)
+        self.gen_blobs(layer, [('%s_M'%(layer['name']),M)])
+        self.fpC.write('L_CLIP ({0}, {1});\n\n'.format(layer['name'], layer['inputs'][0]))
+
     def gen_LayerPRelu(self, layer):
         weights = layer['weights']
         self.gen_blobs(layer, [('%s_W'%(layer['name']),weights)])
@@ -328,6 +348,8 @@ class LWNNBaseC():
             pads = [0,0]
         else:
             pads = list(layer['pads'])[:2]
+        if(-1 in layer.shape):
+            pads = [0xdeadbeef,self.get_padding_mode(layer)]
         with_mask = 0
         if(len(layer['outputs']) == 2):
             with_mask = 1
@@ -337,15 +359,23 @@ class LWNNBaseC():
 
     def gen_LayerMin(self, layer):
         self.gen_no_blobs(layer)
-        self.fpC.write('#define {0}_INPUTS {1}\n'.format(layer['name'], 
+        self.fpC.write('#define {0}_INPUTS {1}\n'.format(layer['name'],
                         ','.join(['L_REF(%s)'%inp for inp in layer['inputs']])))
         self.fpC.write('L_MINIMUM ({0}, {0}_INPUTS);\n\n'.format(layer['name']))
+
+    def gen_LayerMul(self, layer):
+        self.gen_no_blobs(layer)
+        self.fpC.write('#define {0}_INPUTS {1}\n'.format(layer['name'],
+                        ','.join(['L_REF(%s)'%inp for inp in layer['inputs']])))
+        self.fpC.write('L_MUL ({0}, {0}_INPUTS);\n\n'.format(layer['name']))
 
     def gen_LayerAveragePool(self, layer):
         if('pads' not in layer):
             pads = [0,0]
         else:
             pads = list(layer['pads'])[:2]
+        if(-1 in layer.shape):
+            pads = [0xdeadbeef,self.get_padding_mode(layer)]
         with_mask = 0
         if(len(layer['outputs']) == 2):
             with_mask = 1

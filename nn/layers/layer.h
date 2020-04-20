@@ -85,6 +85,7 @@ extern "C" {
 #define L_LSTM(name, input)			L_LAYER_SI(name, input, LSTM)
 #define L_TRANSPOSE(name, input)	L_LAYER_SI(name, input, TRANSPOSE)
 #define L_SLICE(name, input)		L_LAYER_SI(name, input, SLICE)
+#define L_CLIP(name, input)			L_LAYER_SI(name, input, CLIP)
 
 #define L_MAXIMUM(name, inputs)							\
 	static LCONST layer_t* l_inputs_##name[] = {		\
@@ -100,6 +101,11 @@ extern "C" {
 	static LCONST layer_t* l_inputs_##name[] = {		\
 			inputs, NULL };								\
 	L_LAYER_MI(name, ADD)
+
+#define L_MUL(name, inputs)								\
+	static LCONST layer_t* l_inputs_##name[] = {		\
+			inputs, NULL };								\
+	L_LAYER_MI(name, MUL)
 
 #define L_CONCAT(name, inputs)							\
 	static LCONST layer_t* l_inputs_##name[] = {		\

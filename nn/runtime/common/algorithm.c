@@ -100,9 +100,7 @@ int alg_concat(const nn_t* nn, const layer_t* layer, int axis,
 		out_stride *= RTE_FETCH_INT32(&(context->nhwc), j);
 	}
 
-	NNLOG(NN_DEBUG, ("execute %s[%d %d %d %d]: axis=%d, n_block=%d, out stride=%d\n",
-			layer->name,
-			context->nhwc.N, context->nhwc.H, context->nhwc.W, context->nhwc.C,
+	NNLOG(NN_DEBUG, (" axis=%d, n_block=%d, out stride=%d\n",
 			axis, (int)n_block, (int)out_stride));
 
 	while((*input) != NULL)
@@ -302,4 +300,38 @@ int alg_deconv2d_calculate_padding(int dim_kernel, int stride, int dim_in, int d
 		}
 	}
 	return padding;
+}
+
+int alg_broadcast_prepare(layer_context_t** inputA_context, layer_context_t** inputB_context, alg_broadcast_t *broadcast)
+{
+	int r = 0;
+	layer_context_t* tmpC;
+	size_t szA = NHWC_SIZE((*inputA_context)->nhwc);
+	size_t szB = NHWC_SIZE((*inputB_context)->nhwc);
+
+	*broadcast = ALG_BROADCAST_NONE;
+	if(szA > szB) {
+		if(1 == szB) {
+			*broadcast = ALG_BROADCAST_ONE;
+		} else if((*inputA_context)->nhwc.C == szB) {
+			*broadcast = ALG_BROADCAST_CHANNEL;
+		} else {
+			r = NN_E_INVALID_DIMENSION;
+		}
+	} else if(szA < szB) {
+		if(1 == szA) {
+			*broadcast = ALG_BROADCAST_ONE;
+		} else if((*inputB_context)->nhwc.C == szA) {
+			*broadcast = ALG_BROADCAST_CHANNEL;
+		} else {
+			r = NN_E_INVALID_DIMENSION;
+		}
+		tmpC = *inputA_context;
+		*inputA_context = *inputB_context;
+		*inputB_context = tmpC;
+	} else {
+		/* pass */
+	}
+
+	return r;
 }

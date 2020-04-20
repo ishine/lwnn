@@ -122,6 +122,41 @@ class LWNNUtil():
                 self.convert_axis_to_nchw(layer)
             layer['adjusted'] = True
 
+    def get_matched_graph(self):
+        return self._matched_graph
+
+    def graph_match(self, layer, graph):
+        def match_inputs(input_ids, inputs):
+            r = True
+            expected = [graph['Sequence'][i] for i in input_ids]
+            real = [l.op for l in inputs]
+            for e,r in zip(expected, real):
+                if(e not in [r, '?']):
+                    r = False
+            return r
+        r = False
+        seqs = {}
+        if(layer.op == graph['Sequence'][0]):
+            seqs = {0:layer}
+            for id in range(len(graph['Sequence'].keys())):
+                ly = seqs[id]
+                input_ids = graph['Connection'][id]
+                if(len(input_ids) == 0): continue
+                if('inputs' not in ly): continue
+                inputs = self.get_layers(ly.inputs)
+                r = match_inputs(input_ids, inputs)
+                if(r):
+                    for i,l in zip(input_ids, inputs):
+                        if(i not in seqs):
+                            seqs[i] = l
+                        else:
+                            assert(seqs[i].name == l.name)
+                else:
+                    break
+        if(r):
+            self._matched_graph = seqs
+        return r
+
     def optimize(self, additions=[]):
         id = -1
         num_layers = len(self.lwnn_model)
@@ -155,6 +190,14 @@ class LWNNUtil():
 
     def c_str(self, name):
         return cstr(name)
+
+    def __str__(self, model=None):
+        if(model == None):
+            model = self.lwnn_model
+        cstr = 'LWNN Model %s: %d layers\n'%(self.name, len(model))
+        for layer in model:
+            cstr += ' %s\n'%(layer)
+        return cstr
 
 class LWNNLayer(dict):
     def __init__(self, **kwargs):
@@ -217,6 +260,7 @@ class LWNNModel(LWNNUtil):
             (self.opt_IsLayerFakeQuantize, self.opt_LayerFakeQuantize, None),
             (self.opt_IsLayerHasInitializer, self.opt_LayerHasInitializer, None),
             (self.opt_IsLayerDense, self.opt_LayerDense, None),
+            (self.opt_IsLayerMatMul, self.opt_LayerMatMul, None),
             (self.opt_IsLayerConv1D, self.opt_LayerConv1D, None),
             (self.opt_IsLayerPooling1D, self.opt_LayerPooling1D, None),
             (self.opt_IsLayerConvBeforeBN, self.opt_FuseConvBN, None),
@@ -228,7 +272,6 @@ class LWNNModel(LWNNUtil):
             (self.opt_IsLayerDetectionOutputWithConst, self.opt_MergeConstToDetectionOutput, None),
             (self.opt_IsLayerOutputWithoutConsumers, self.opt_LayerOutputWithoutConsumers, None),
             (self.opt_IsLayerOutputWithOutput, self.opt_RemoveOutputWithOutput, None),
-            (self.opt_IsLayerClipRelu, self.opt_LayerClip2Relu, None),
             (self.opt_IsLayerFlatten, self.opt_LayerFlatten2Reshape, None),
             (self.opt_IsLayerPad, self.opt_LayerPad, None),
             (self.opt_IsLayerMfcc, self.opt_LayerMfcc, None),
@@ -584,6 +627,17 @@ class LWNNModel(LWNNUtil):
         self.lwnn_model.remove(layer)
         return True
 
+    def opt_IsLayerMatMul(self, layer):
+        r = False
+        if(layer['op'] == 'MatMul'):
+            r = True
+        return r
+
+    def opt_LayerMatMul(self, layer):
+        layer['op'] = 'Dense'
+        layer.bias = np.zeros((layer.shape[-1]), np.float32)
+        return False
+
     def opt_IsLayerConv1D(self, layer):
         r = False
         if((layer['op'] == 'Conv') and 
@@ -670,17 +724,6 @@ class LWNNModel(LWNNUtil):
         if(layer['op'] == 'Reshape'):
             r = True
         return r
-
-    def opt_IsLayerClipRelu(self, layer):
-        r = False
-        if((layer['op'] == 'Clip') and
-           (('min' not in layer) or (layer['min']==0.0))):
-            r = True
-        return r
-
-    def opt_LayerClip2Relu(self, layer):
-        layer['op'] = 'Relu'
-        return False
 
     def opt_IsLayerOutputWithoutConsumers(self, layer):
         r = False
@@ -874,11 +917,3 @@ class LWNNModel(LWNNUtil):
                 layer['inputs'] = [self.c_str(inp) for inp in layer['inputs']]
             layer['outputs'] = [self.c_str(out) for out in layer['outputs']]
         self.is_model_channel_first()
-
-    def __str__(self, model=None):
-        if(model == None):
-            model = self.lwnn_model
-        cstr = 'LWNN Model %s:\n'%(self.name)
-        for layer in model:
-            cstr += ' %s\n'%(layer)
-        return cstr

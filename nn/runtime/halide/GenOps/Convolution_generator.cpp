@@ -45,6 +45,16 @@ public:
 		Halide::Expr in_row = strideY * y + r.y - padY;
 		Halide::Expr in_col = strideX * x + r.x - padX;
 		conv(c, x, y, n) += W(r.z, r.x, r.y, c) * in_bounded(r.z, in_col, in_row, n);
+
+		#ifndef LWNN_ON_HALIDE
+		if (HL_GET_TARGET_ARCH() == Target::X86) {
+			conv.parallel(y)
+				.reorder(c, x, y, n);
+			W.in().compute_at(conv, r.x);
+			B.in().compute_at(conv, c);
+			input.in().compute_at(conv, x);
+		}
+		#endif
 	}
 };
 /* ============================ [ DECLARES  ] ====================================================== */

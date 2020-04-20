@@ -107,6 +107,7 @@ static int cpu_init_layer(const nn_t* nn, const layer_t* layer)
 	{
 		if(layer->op < ARRAY_SIZE(cpu_lops[nn->network->type]))
 		{
+			NNLOG(NN_DEBUG, ("init %s\n", layer->name));
 			r = cpu_lops[nn->network->type][layer->op].init(nn, layer);
 		}
 	}
@@ -127,6 +128,7 @@ static int cpu_execute_layer(const nn_t* nn, const layer_t* layer)
 	{
 		if(layer->op < ARRAY_SIZE(cpu_lops[nn->network->type]))
 		{
+			NNLOG(NN_DEBUG, ("execute %s: [%dx%dx%dx%d]\n", layer->name, L_SHAPES(layer)));
 			r = cpu_lops[nn->network->type][layer->op].execute(nn, layer);
 #ifndef DISABLE_NN_DDO
 			NNDDO(NN_DEBUG, rte_ddo_save(nn, layer));
@@ -258,10 +260,11 @@ int rte_cpu_create_layer_context(
 	int r = 0;
 	layer_cpu_context_t* context = NULL;
 	rte_cpu_t* rt = (rte_cpu_t*)nn->runtime;
+	size_t total_sz = sz+nout*sizeof(void*);
 
 	assert(sz >= sizeof(layer_cpu_context_t));
 
-	context = malloc(sz+nout*sizeof(void*));
+	context = malloc(total_sz);
 
 	if(context != NULL)
 	{
@@ -297,9 +300,8 @@ int rte_cpu_create_layer_context(
 		}
 		context->out = (void**)(((unsigned long long)context)+sz);
 		context->nout = nout;
-		if(nout > 0)
-		{
-			memset(context->out, 0, sizeof(void*)*nout);
+		if(total_sz > sz) {
+			memset(&context[1], 0, total_sz-sizeof(*context));
 		}
 		r = layer_get_NHWC(layer, &context->nhwc);
 		if(0 != r)
@@ -315,8 +317,6 @@ int rte_cpu_create_layer_context(
 	if(0 == r)
 	{
 		layer->C->context = (layer_context_t*)context;
-
-		RTE_CPU_LOG_LAYER_SHAPE(layer);
 	}
 
 	return r;
@@ -611,32 +611,55 @@ void rte_cpu_dynamic_reshape(const layer_t* layer, layer_cpu_context_t* input_co
 		layer_set_dynamic_shape(layer, axis, NHWC_SIZE(input_context->nhwc));
 	}
 
-	if(L_OP_OUTPUT == layer->op) {
-		layer->C->context->nhwc = input_context->nhwc;
-	} else {
-		layer->C->context->nhwc.N = input_context->nhwc.N;
-		assert(NHWC_SIZE(input_context->nhwc) == NHWC_SIZE(layer->C->context->nhwc));
-	}
+	layer->C->context->nhwc.N = input_context->nhwc.N;
+	assert(NHWC_SIZE(input_context->nhwc) == NHWC_SIZE(layer->C->context->nhwc));
+}
+
+void rte_cpu_dynamic_shape_copy(const layer_t* layer, layer_cpu_context_t* input_context) {
+	layer->C->context->nhwc = input_context->nhwc;
 }
 
 void rte_cpu_dynamic_batch(const layer_t* layer, layer_cpu_context_t* input_context) {
 	layer->C->context->nhwc.N = input_context->nhwc.N;
 }
 
-int rte_cpu_dynamic_conv2d(const layer_t* layer,
+int rte_cpu_dynamic_memory(void** mem, size_t required, size_t* allocated, size_t type_sz)
+{
+	int r = 0;
+
+	if(NULL == *mem) {
+		*mem = malloc(required*type_sz);
+		*allocated = required;
+	} else if(*allocated > 0) {
+		if(required > *allocated) {
+			free(*mem);
+			*mem = malloc(required*type_sz);
+			*allocated = required;
+		}
+	} else {
+		r = NN_E_INVALID_LAYER;
+	}
+
+	if(NULL == *mem) {
+		r = NN_E_NO_MEMORY;
+	}
+
+	return r;
+}
+
+int rte_cpu_dynamic_conv2d_or_pool(const layer_t* layer,
 		layer_cpu_context_t* context, layer_cpu_context_t* input_context,
 		int* padY, int* padX, int strideY, int strideX,
-		int knlY, int knlX, void** O, size_t* max, size_t type_sz) {
+		int knlY, int knlX) {
 	int r = 0;
 	int axis = layer_get_dynamic_axis(layer);
 	assert(axis != 3);
 	if(axis > 0) {
-		size_t bs;
 		assert(*padY == 0xdeadbeef);
 		if(0 == *padX) { /* SAME */
 			context->nhwc.N = input_context->nhwc.N;
-			context->nhwc.H = input_context->nhwc.H;
-			context->nhwc.W = input_context->nhwc.W;
+			context->nhwc.H = input_context->nhwc.H/strideY;
+			context->nhwc.W = input_context->nhwc.W/strideX;
 			*padY = ((context->nhwc.H-1)*strideY+knlY-input_context->nhwc.H)/2;
 			*padX = ((context->nhwc.W-1)*strideX+knlX-input_context->nhwc.W)/2;
 		} else { /* VALID */
@@ -645,23 +668,7 @@ int rte_cpu_dynamic_conv2d(const layer_t* layer,
 			context->nhwc.W = (input_context->nhwc.W-knlX)/strideX + 1;
 			*padY = *padX = 0;
 		}
-		bs = NHWC_SIZE(context->nhwc);
-		if(NULL == *O) {
-			*O = malloc(bs*type_sz);
-			*max = bs;
-		} else {
-			if(bs > *max) {
-				free(*O);
-				*O = malloc(bs*type_sz);
-				*max = bs;
-			}
-		}
-		if(NULL == *O) {
-			r = NN_E_NO_MEMORY;
-			context->out[0] = NULL;
-		} else {
-			context->out[0] = *O;
-		}
+		NNLOG(NN_DEBUG, (" -> [%dx%dx%dx%d],", L_SHAPES(layer)));
 	} else {
 		if(context->nhwc.N != input_context->nhwc.N) {
 			if(layer->dims[0] > input_context->nhwc.N) {
