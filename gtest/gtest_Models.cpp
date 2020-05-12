@@ -205,7 +205,7 @@ NNT_CASE_DEF(MASKRCNN) =
 {
 	NNT_CASE_DESC_ARGS(maskrcnn),
 };
-
+#if 0
 NNT_CASE_DEF(PNET) =
 {
 	NNT_CASE_DESC(PNet),
@@ -220,6 +220,12 @@ NNT_CASE_DEF(ONET) =
 {
 	NNT_CASE_DESC(ONet),
 };
+#else
+NNT_CASE_DEF(FACEDETECTNET) =
+{
+	NNT_CASE_DESC(facedetectnet),
+};
+#endif
 static const nnt_model_args_t nnt_facenet_args =
 {
 	load_facenet_input,
@@ -474,7 +480,7 @@ static void* load_maskrcnn_input(nn_t* nn, const char* path, int id, size_t* sz)
 
 	return (void*) input;
 }
-
+#if 0
 static void* load_facenet_input(nn_t* nn, const char* path, int id, size_t* sz)
 {
 	image_t* im;
@@ -525,7 +531,112 @@ static void* load_facenet_input(nn_t* nn, const char* path, int id, size_t* sz)
 	if(dllO) dlclose(dllO);
 	return input;
 }
+#else
+static void prewhiten(float* im, int H, int W, int C) {
+	float mean = 0.0f;
+	for (int i = 0; i < H*W*C; ++i) {
+		mean += im[i];
+	}
+	mean = mean/(H*W*C);
+	float std = 0.0f;
+	for (int i = 0; i < H*W*C; ++i) {
+		std += (im[i]-mean)*(im[i]-mean);
+	}
+	std = std/(H*W*C);
+	std = (float)std::fmax(std::sqrt(std), 1.0f / std::sqrt(H*W*C));
+	for (int i = 0; i < H*W*C; ++i) {
+		im[i] = (im[i] - mean) / std;
+	}
 
+	NNLOG(NN_DEBUG, (" mean=%f, std=%f\n", mean, std));
+}
+
+static void* load_facenet_input(nn_t* nn, const char* path, int id, size_t* sz)
+{
+	image_t* im, *resized_im;
+	float* input = NULL;
+	void *dllFDN=NULL;
+	layer_context_t* context;
+	const network_t* network;
+	nn_t *FDN=NULL;
+
+	network = nnt_load_network(FACEDETECTNET_cases[0].networkFloat, &dllFDN);
+	if(NULL != network) {
+		FDN = nn_create(network, RUNTIME_CPU);
+	}
+
+	assert(g_InputImagePath != NULL);
+	printf("loading %s for %s\n", g_InputImagePath, nn->network->name);
+
+	if(FDN!=NULL) {
+		context = (layer_context_t*)FDN->network->inputs[0]->layer->C->context;
+		im = image_open(g_InputImagePath);
+		assert(im != NULL);
+		resized_im = image_resize(im, context->nhwc.W, context->nhwc.H);
+		assert(resized_im != NULL);
+		float* fdn_input = (float*)FDN->network->inputs[0]->data;
+
+		for(int i=0; i<NHWC_BATCH_SIZE(context->nhwc)/3; i++) { /* BGR */
+			fdn_input[3*i] = (resized_im->data[3*i+2]-104.0);
+			fdn_input[3*i+1] = (resized_im->data[3*i+1]-117.0);
+			fdn_input[3*i+2] = (resized_im->data[3*i]-123.0);
+		}
+
+		int r = nn_predict(FDN);
+		EXPECT_EQ(0, r);
+		int num_det = FDN->network->outputs[0]->layer->C->context->nhwc.N;
+		float* output = (float*)FDN->network->outputs[0]->data;
+
+		NHWC_t inhwc = {1, im->h, im->w, im->c};
+		NHWC_t onhwc = nn->network->inputs[0]->layer->C->context->nhwc;
+		assert(3 == onhwc.C);
+
+		*sz = num_det*NHWC_BATCH_SIZE(onhwc)*sizeof(float);
+		input = (float*)malloc(*sz);
+		assert(input != NULL);
+		float* im_data = new float[im->h*im->w*im->c];
+		assert(im_data != NULL);
+		for(int i=0; i<im->h*im->w*im->c; i++) {
+			im_data[i] = (float)im->data[i];
+		}
+
+		for(int i=0; (i<num_det) && (0==r); i++) {
+			float prop = output[7*i+2];
+			int x1 = output[7*i+3]*im->w;
+			int y1 = output[7*i+4]*im->h;
+			int x2 = output[7*i+5]*im->w;
+			int y2 = output[7*i+6]*im->h;
+			int w = x2 - x1;
+			int h = y2 - y1;
+			int l = std::max(w,h);
+			float* o = input + i*NHWC_BATCH_SIZE(onhwc);
+			float boxes[4] = { (float)(y1-(l-h)/2)/im->h,(float)(x1-(l-w)/2)/im->w,
+							   (float)(y2+(l-h)/2)/im->h,(float)(x2+(l-w)/2)/im->w };
+			int indices = 0;
+			r = ROIAlign_forward_cpu(o, im_data, boxes, &indices, &onhwc, &inhwc);
+			if(0 == r) {
+				prewhiten(o, onhwc.H, onhwc.W, onhwc.C);
+			}
+			image_draw_rectange(im, x1, y1, w, h, 0x00FF00);
+			char text[128];
+			snprintf(text, sizeof(text), "%d/%d %.1f%%", i, num_det, prop*100);
+			image_draw_text(im, (int)x1, (int)y1, text,  0xFF0000);
+		}
+
+		delete [] im_data;
+		image_save(im, "predictions.png");
+		image_close(im);
+		image_close(resized_im);
+		printf("found %d faces:\n", num_det);
+	} else {
+		printf("loading face detect net failed\n");
+	}
+
+	if(FDN) nn_destory(FDN);
+	if(dllFDN) dlclose(dllFDN);
+	return input;
+}
+#endif
 static void* load_output(const char* path, int id, size_t* sz)
 {
 	char name[256];
@@ -801,7 +912,7 @@ static int ds_compare(nn_t* nn, int id, float * output, size_t szo, float* glode
 
 static int maskrcnn_compare(nn_t* nn, int id, float * output, size_t szo, float* gloden, size_t szg)
 {
-	image_t* im;
+	image_t* im = NULL;
 	layer_context_t* context = (layer_context_t*)nn->network->inputs[0]->layer->C->context;
 	char* pos;
 	float* mrcnn_detection = (float*)nn->network->outputs[1]->data;
@@ -830,10 +941,20 @@ static int maskrcnn_compare(nn_t* nn, int id, float * output, size_t szo, float*
 	assert(mC == ARRAY_SIZE(class_names));
 	pos = strstr((char*)g_InputImagePath, ".raw");
 	if(NULL != pos) {
-		/* pass */
+		im = image_create(W,H,3);
+		if(NULL != im) {
+			float* input = (float*)nn->network->inputs[0]->data;
+			for(int i=0; i<W*H*3; i+=3)
+			{
+				im->data[i] = input[i]+123.7;
+				im->data[i+1] = input[i+1]+116.8;
+				im->data[i+2] = input[i+2]+103.9;
+			}
+		}
 	} else {
 		im = image_open(g_InputImagePath);
-		assert(im != NULL);
+	}
+	if(NULL != im) {
 		float scale = std::min((float)H/im->h, (float)W/im->w);
 		float y_top = (H-scale*im->h)/2;
 		float x_top = (W-scale*im->w)/2;
@@ -905,8 +1026,32 @@ static int maskrcnn_compare(nn_t* nn, int id, float * output, size_t szo, float*
 	return 0;
 }
 
+static float euclidean_distances(float *a, float *b, int size) {
+	float dis = 0.0f;
+
+	for(int i=0; i<size; i++) {
+		float delta = a[i]-b[i];
+		dis += delta*delta;
+	}
+
+	return dis;
+}
 static int facenet_compare(nn_t* nn, int id, float * output, size_t szo, float* gloden, size_t szg)
 {
+	int features = NHWC_BATCH_SIZE(nn->network->outputs[0]->layer->C->context->nhwc);
+	int n = szo / features;
+	const float threshold = 1.05;
+
+	for(int i=1; i<n; i++) {
+		printf("%d:", i);
+		for(int j=0; j<i; j++) {
+			float dis = euclidean_distances(&output[i*features], &output[j*features], features);
+			if(dis < threshold) {
+				printf(" %d(%.2f)", j, dis);
+			}
+		}
+		printf("\n");
+	}
 	return 0;
 }
 /* ============================ [ FUNCTIONS ] ====================================================== */
